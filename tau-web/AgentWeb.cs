@@ -66,16 +66,16 @@ namespace AgentWeb
 
         static void PrintHelp()
         {
-            Console.WriteLine("agentweb - 自己完結型ローカルWeb UIを備えたAIエージェント");
+            Console.WriteLine("tau-web - 自己完結型ローカルWeb UIを備えたAIエージェント");
             Console.WriteLine("使用法: tau-web.exe [オプション]");
-            Console.WriteLine("  --config <path>   設定ファイル(agentweb.json)のパス");
+            Console.WriteLine("  --config <path>   設定ファイル(tau-web.json)のパス");
             Console.WriteLine("  --port <n>        ポート番号 (既定 8000)");
         }
 
         static void RunConsole(int port, Config cfg)
         {
             Console.OutputEncoding = Encoding.UTF8;
-            Console.WriteLine("agentweb (console)");
+            Console.WriteLine("tau-web (console)");
             Console.WriteLine("  Listen : http://localhost:" + port + "/");
             Console.WriteLine("  API URL: " + cfg.ApiBaseUrl);
             Console.WriteLine("  Model  : " + cfg.Model
@@ -126,7 +126,7 @@ namespace AgentWeb
         public int KeepRecentTokens;       // 要約せず残す直近トークン数
         public string SystemPrompt;        // AI エージェント の システムプロンプト
         public string BindPath;            // 公開ディレクトリ (Web UI 静的ファイル)
-        public string ConfigPath;          // 設定ファイル(agentweb.json)のパス
+        public string ConfigPath;          // 設定ファイル(tau-web.json)のパス
         public bool OpenBrowserOnStart;    // 起動時にブラウザを開くか
         public string Theme;               // 配色 ("dark" / "light")。ブラウザを変えても維持する
 
@@ -169,8 +169,8 @@ namespace AgentWeb
             ApplyConfigFile();
         }
 
-        // 設定ファイル(agentweb.json)から上書き適用する。
-        // 保存先はセッションと同じ %APPDATA%\agentweb\agentweb.json。
+        // 設定ファイル(tau-web.json)から上書き適用する。
+        // 保存先はセッションと同じ %APPDATA%\tau-web\tau-web.json。
         // 旧配置(実行ディレクトリ)にしか無い場合は一度だけ移行する。
         // 優先度: 環境変数 < 設定ファイル
         void ApplyConfigFile()
@@ -178,7 +178,23 @@ namespace AgentWeb
             string path = ConfigPath;
             if (path == null || path.Trim().Length == 0)
             {
+                // 旧バージョンの %APPDATA%\agentweb から %APPDATA%\tau-web へ
+                // データを移行する(初回のみ)。
+                try
+                {
+                    if (MigrateLegacyAppData())
+                    {
+                        Console.WriteLine("[config] データを移行しました: "
+                            + LegacyAppDataDir() + " → " + AppDataDir());
+                        Console.WriteLine("         旧いフォルダは残しています"
+                            + "(確認後に削除して構いません)。");
+                    }
+                }
+                catch { }
+
                 path = DefaultConfigPath();
+
+                // 旧配置(tau-web.exe と同じフォルダの agentweb.json)からの移行も行う
                 try
                 {
                     string oldPath = Path.Combine(AppDir(), "agentweb.json");
@@ -307,18 +323,96 @@ namespace AgentWeb
             File.WriteAllText(path, Json.ToString(ToJsonDict()), new UTF8Encoding(false));
         }
 
-        // 設定・セッションの保存先 (%APPDATA%\agentweb)
+        // 設定・セッションの保存先 (%APPDATA%\tau-web)
         public static string AppDataDir()
+        {
+            string d = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            if (d == null || d.Length == 0) d = Path.GetTempPath();
+            return Path.Combine(d, "tau-web");
+        }
+
+        // 旧バージョンの保存先 (%APPDATA%\agentweb)
+        public static string LegacyAppDataDir()
         {
             string d = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
             if (d == null || d.Length == 0) d = Path.GetTempPath();
             return Path.Combine(d, "agentweb");
         }
 
-        // 既定の設定ファイルパス (%APPDATA%\agentweb\agentweb.json)
+        // 既定の設定ファイルパス (%APPDATA%\tau-web\tau-web.json)
         public static string DefaultConfigPath()
         {
-            return Path.Combine(AppDataDir(), "agentweb.json");
+            return Path.Combine(AppDataDir(), "tau-web.json");
+        }
+
+        // 旧バージョンの設定ファイル (%APPDATA%\agentweb\agentweb.json)
+        public static string LegacyConfigPath()
+        {
+            return Path.Combine(LegacyAppDataDir(), "agentweb.json");
+        }
+
+        // %APPDATA%\agentweb にデータがあれば %APPDATA%\tau-web へコピーする。
+        // 新しい場所に既にデータがある場合は何もしない。
+        // 旧い場所は消さない(利用者が自分で判断できるように)。
+        // コピーした場合は true。
+        public static bool MigrateLegacyAppData()
+        {
+            string oldDir = LegacyAppDataDir();
+            string newDir = AppDataDir();
+
+            try
+            {
+                if (!Directory.Exists(oldDir)) return false;
+                if (Directory.Exists(newDir) && Directory.GetFileSystemEntries(newDir).Length > 0)
+                    return false;
+
+                CopyDirectory(oldDir, newDir);
+
+                // 設定ファイル名も変える(agentweb.json -> tau-web.json)
+                string oldCfg = Path.Combine(newDir, "agentweb.json");
+                string newCfg = Path.Combine(newDir, "tau-web.json");
+                try
+                {
+                    if (File.Exists(oldCfg) && !File.Exists(newCfg))
+                        File.Move(oldCfg, newCfg);
+                }
+                catch { }
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        // ディレクトリを再帰的にコピーする(既存ファイルは上書きしない)。
+        static void CopyDirectory(string from, string to)
+        {
+            Directory.CreateDirectory(to);
+
+            string[] files;
+            try { files = Directory.GetFiles(from); }
+            catch { files = new string[0]; }
+
+            for (int i = 0; i < files.Length; i++)
+            {
+                string name = Path.GetFileName(files[i]);
+                string dest = Path.Combine(to, name);
+                if (File.Exists(dest)) continue;   // 上書きしない
+                try { File.Copy(files[i], dest, false); }
+                catch { }
+            }
+
+            string[] dirs;
+            try { dirs = Directory.GetDirectories(from); }
+            catch { dirs = new string[0]; }
+
+            for (int i = 0; i < dirs.Length; i++)
+            {
+                string name = Path.GetFileName(dirs[i]);
+                CopyDirectory(dirs[i], Path.Combine(to, name));
+            }
         }
 
         // 設定ファイルを再読み込みする(トレイメニューから呼ぶ)。
@@ -923,7 +1017,7 @@ namespace AgentWeb
         {
             Dictionary<string, object> d = new Dictionary<string, object>();
             d["ok"] = true;
-            d["server"] = "agentweb (csc.exe / C#5)";
+            d["server"] = "tau-web (csc.exe / C#5)";
             d["model"] = config.Model;
             d["models"] = config.ModelsToJson();
             d["apiKey"] = (config.SecretKey.Length > 0) ? "set" : "not-set";
@@ -1395,7 +1489,7 @@ namespace AgentWeb
 
     // ------------------------------------------------------------------------
     //  セッションストア (Windows AppData 配下に JSON で永続化)
-    //   保存先:  %APPDATA%\agentweb\sessions\<sessionId>.json
+    //   保存先:  %APPDATA%\tau-web\sessions\<sessionId>.json
     // ------------------------------------------------------------------------
     class SessionStore
     {
@@ -1403,7 +1497,7 @@ namespace AgentWeb
 
         public SessionStore()
         {
-            // 設定ファイルと同じ場所 (%APPDATA%\agentweb) の sessions 配下に置く
+            // 設定ファイルと同じ場所 (%APPDATA%\tau-web) の sessions 配下に置く
             sessionsDir = Path.Combine(Config.AppDataDir(), "sessions");
             Directory.CreateDirectory(sessionsDir);
         }

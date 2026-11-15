@@ -864,6 +864,75 @@ def main():
             bad("全角半角混在 %d バイトの入力が欠けます (保存 %s 文字)"
                 % (len(text.encode("utf-8")), len(saved) if saved else 0))
 
+    # ---- 6c-12. 旧データディレクトリからの移行 ----
+    # %APPDATA%\tau (旧) -> %APPDATA%\tau-cli (新)
+    mig_home = os.path.join(work, "mighome")
+    mig_xdg = os.path.join(mig_home, ".config")
+    old_dir = os.path.join(mig_xdg, "tau")
+    new_dir = os.path.join(mig_xdg, "tau-cli")
+    os.makedirs(os.path.join(old_dir, "sessions"), exist_ok=True)
+
+    # 旧い場所に設定とセッションを置く
+    with open(os.path.join(old_dir, "tau.json"), "w", encoding="utf-8") as f:
+        json.dump({"llmApiUrl": "http://127.0.0.1:%d/v1/chat/completions" % port,
+                   "llmApiKey": "k", "model": "migrated-model",
+                   "allowTools": False, "useSystemProxy": False}, f)
+    with open(os.path.join(old_dir, "sessions", "s_old.json"), "w",
+              encoding="utf-8") as f:
+        json.dump({"id": "s_old", "title": "旧セッション",
+                   "messages": [{"role": "user", "content": "移行テスト"}]},
+                  f, ensure_ascii=False)
+
+    mig_env = {"HOME": mig_home, "XDG_CONFIG_HOME": mig_xdg}
+    out = run_tau("/exit\n", extra_env=mig_env)
+
+    if "Migrated data from" in out:
+        ok("旧データディレクトリからの移行を通知します")
+    else:
+        bad("移行が行われていません: " + out[-400:])
+
+    if os.path.exists(os.path.join(new_dir, "tau.json")):
+        ok("設定ファイルが新しい場所へコピーされます")
+    else:
+        bad("設定ファイルがコピーされていません")
+
+    if os.path.exists(os.path.join(new_dir, "sessions", "s_old.json")):
+        ok("セッションファイルが新しい場所へコピーされます")
+    else:
+        bad("セッションファイルがコピーされていません")
+
+    # 旧い場所は残す(削除しない)
+    if os.path.exists(os.path.join(old_dir, "tau.json")):
+        ok("旧いディレクトリは残します(削除しない)")
+    else:
+        bad("旧いディレクトリが削除されています")
+
+    # 移行後は新しい場所の設定が使われる
+    with open(os.path.join(new_dir, "tau.json"), encoding="utf-8") as f:
+        cfg_after = json.load(f)
+    if cfg_after.get("model") == "migrated-model":
+        ok("移行した設定が引き継がれます")
+    else:
+        bad("移行した設定が失われています")
+
+    # 2 回目の起動では移行しない(既にデータがある)
+    out2 = run_tau("/exit\n", extra_env=mig_env)
+    if "Migrated data from" not in out2:
+        ok("新しい場所にデータがある場合は再移行しません")
+    else:
+        bad("毎回移行してしまいます")
+
+    # 新しい場所にデータがある場合は旧い場所の内容で上書きしない
+    with open(os.path.join(new_dir, "tau.json"), "w", encoding="utf-8") as f:
+        json.dump({"model": "keep-me"}, f)
+    out3 = run_tau("/exit\n", extra_env=mig_env)
+    with open(os.path.join(new_dir, "tau.json"), encoding="utf-8") as f:
+        cfg_keep = json.load(f)
+    if cfg_keep.get("model") == "keep-me":
+        ok("既存の新しいデータを上書きしません")
+    else:
+        bad("既存データが上書きされました: " + str(cfg_keep))
+
     # ---- 6c-11. Windows のクリップボード貼り付け ----
     # ENABLE_LINE_INPUT は ReadFile にも効くため、Console.ReadLine のまま
     # 行編集(Ctrl-V 貼り付け)が働く。SetConsoleMode で有効化しておく。

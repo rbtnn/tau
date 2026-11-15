@@ -21,9 +21,10 @@ namespace Tau
     // =======================================================================
     //  設定
     //
-    //  agentweb とは独立した設定ファイルを持つ。
+    //  tau-web とは独立した設定ファイルを持つ。
     //  優先度: 環境変数 < tau.json
-    //  保存先: %APPDATA%\tau\tau.json (Linux では ~/.config/tau/tau.json)
+    //  保存先: %APPDATA%\tau-cli\tau.json
+    //          (Linux では ~/.config/tau-cli/tau.json)
     // =======================================================================
     class Config
     {
@@ -100,11 +101,72 @@ namespace Tau
             return Path.Combine(TauDataDir(), "tau.json");
         }
 
-        // tau 独自のデータディレクトリ(設定とセッションの保存先)。
-        // agentweb とは共有しない。
+        // tau-cli 独自のデータディレクトリ(設定とセッションの保存先)。
+        // tau-web とは共有しない。
         public static string TauDataDir()
         {
+            return AppDirUnder("tau-cli");
+        }
+
+        // 旧バージョンが使っていたデータディレクトリ。
+        // ここにデータがあれば、新しい場所へ 1 度だけコピーする。
+        public static string LegacyDataDir()
+        {
             return AppDirUnder("tau");
+        }
+
+        // 新しい場所が無く、旧い場所にある場合に中身をコピーする。
+        // 旧い場所は消さない(利用者が自分で判断できるように)。
+        // コピーした場合は true。
+        public static bool MigrateLegacyData()
+        {
+            string oldDir = LegacyDataDir();
+            string newDir = TauDataDir();
+
+            try
+            {
+                if (!Directory.Exists(oldDir)) return false;
+                // 新しい場所に既にデータがあるなら移行しない
+                // (利用者が新しく使い始めている可能性がある)
+                if (Directory.Exists(newDir) && Directory.GetFileSystemEntries(newDir).Length > 0)
+                    return false;
+
+                CopyDirectory(oldDir, newDir);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        // ディレクトリを再帰的にコピーする(既存ファイルは上書きしない)。
+        static void CopyDirectory(string from, string to)
+        {
+            Directory.CreateDirectory(to);
+
+            string[] files;
+            try { files = Directory.GetFiles(from); }
+            catch { files = new string[0]; }
+
+            for (int i = 0; i < files.Length; i++)
+            {
+                string name = Path.GetFileName(files[i]);
+                string dest = Path.Combine(to, name);
+                if (File.Exists(dest)) continue;   // 上書きしない
+                try { File.Copy(files[i], dest, false); }
+                catch { }
+            }
+
+            string[] dirs;
+            try { dirs = Directory.GetDirectories(from); }
+            catch { dirs = new string[0]; }
+
+            for (int i = 0; i < dirs.Length; i++)
+            {
+                string name = Path.GetFileName(dirs[i]);
+                CopyDirectory(dirs[i], Path.Combine(to, name));
+            }
         }
 
         static string AppDirUnder(string name)

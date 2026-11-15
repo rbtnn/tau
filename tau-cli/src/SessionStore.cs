@@ -21,12 +21,12 @@ namespace Tau
     // =======================================================================
     //  セッションの永続化
     //
-    //  セッションは agentweb とは別に、tau 独自の場所へ保存する。
-    //    %APPDATA%\tau\sessions\<id>.json
-    //    %APPDATA%\tau\sessions\_state.json  (最後に開いたセッション)
+    //  セッションは tau-web とは別に、tau-cli 独自の場所へ保存する。
+    //    %APPDATA%\tau-cli\sessions\<id>.json
+    //    %APPDATA%\tau-cli\sessions\_state.json  (最後に開いたセッション)
     //
-    //  ファイル形式は agentweb と同じ(互換)だが、保存先は共有しない。
-    //  設定も tau 独自の tau.json を使う。
+    //  ファイル形式は tau-web と同じ(互換)だが、保存先は共有しない。
+    //  設定も tau-cli 独自の tau.json を使う。
     // =======================================================================
     class SessionStore
     {
@@ -34,8 +34,8 @@ namespace Tau
 
         public SessionStore()
         {
-            // セッションは agentweb と共有せず、tau 独自の場所に保存する。
-            //   %APPDATA%\tau\sessions\<id>.json
+            // セッションは tau-web と共有せず、tau-cli 独自の場所に保存する。
+            //   %APPDATA%\tau-cli\sessions\<id>.json
             sessionsDir = Path.Combine(Config.TauDataDir(), "sessions");
             try { Directory.CreateDirectory(sessionsDir); }
             catch { }

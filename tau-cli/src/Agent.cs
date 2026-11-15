@@ -40,7 +40,7 @@ namespace Tau
             return m;
         }
 
-        // ツール実行記録を添えたメッセージ(agentweb と同じ形式で保存する)
+        // ツール実行記録を添えたメッセージ(tau-web と同じ形式で保存する)
         // 注意: 4 引数版へ委譲すると相互再帰で StackOverflow になるため、ここで組み立てる。
         static Dictionary<string, object> Msg(string role, string content, List<object> steps)
         {

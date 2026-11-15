@@ -48,18 +48,34 @@ build.bat
 :: 生成後は tau-web.exe（または run.bat）で起動します
 ```
 
-## 設定（agentweb.json）
+## 設定（tau-web.json）
 
 設定ファイルは **セッションと同じ場所** に置かれます（無ければ環境変数/既定値）。
 
 ```
-%APPDATA%\agentweb\agentweb.json          ← 設定
-%APPDATA%\agentweb\sessions\<id>.json    ← セッション
+%APPDATA%\tau-web\tau-web.json          ← 設定
+%APPDATA%\tau-web\sessions\<id>.json    ← セッション
 ```
 
-- 旧バージョンで `tau-web.exe` と同じフォルダに置いていた `agentweb.json` は、
+- 旧バージョンで `tau-web.exe` と同じフォルダに置いていた `tau-web.json` は、
   初回起動時に自動で新しい場所へ移行されます（新しい場所にファイルが無い場合のみ）。
 - 旧配置（`tau-web.exe` と同じフォルダ）のファイルは、**新しい場所にファイルが無い場合のみ**読み込まれます。
+
+### 旧バージョンからの移行
+
+以前のバージョンは `%APPDATA%\agentweb\` に保存していました。
+起動時に **`%APPDATA%\tau-web\` が空で、`%APPDATA%\agentweb\` にデータがある場合**、
+自動でコピーします。
+
+```
+[config] データを移行しました: C:\Users\...\AppData\Roaming\agentweb
+         → C:\Users\...\AppData\Roaming\tau-web
+         旧いフォルダは残しています(確認後に削除して構いません)。
+```
+
+- コピーのみで、**旧いフォルダは削除しません**（確認後に手動で消してください）
+- 新しい場所に既にデータがある場合は**移行しません**（上書きしない）
+- 設定ファイル名も `agentweb.json` → `tau-web.json` に変わります
 - **Web 画面の `⚙ settings` から編集・保存できます**（保存後は即時反映。ポート変更のみ再起動が必要）。
 
 設定項目は次のとおりです（`⚙ settings` からも同じ項目を編集できます）。
@@ -112,7 +128,7 @@ build.bat
 | `theme` | `dark` | 配色（`dark` / `light`）。ブラウザを変えても維持される |
 
 > 互換性：既存の環境変数（`LLM_API_KEY` 等）も引き続き既定値として使えますが、
-> `agentweb.json` が優先されます。
+> `tau-web.json` が優先されます。
 
 ### 複数モデルの設定（`models`）
 
@@ -306,7 +322,7 @@ node test_mermaid.js /tmp/mm.js
 
 | ログ | 意味 / 対処 |
 |---|---|
-| `[agent] stream: tools=off (allowTools=False)` | ツールが無効。`agentweb.json` の `allowTools` を `true` に（UI の `tools` バッジでも切替可） |
+| `[agent] stream: tools=off (allowTools=False)` | ツールが無効。`tau-web.json` の `allowTools` を `true` に（UI の `tools` バッジでも切替可） |
 | `[agent] stream: tools=on defs=5` | ツール定義は送信されている（正常） |
 | `[agent] stream first data: {...}` | API の最初の応答。`tool_calls` が含まれるか確認 |
 | `[agent] finish_reason=...` | `tool_calls` ならツール呼び出し、`stop` なら本文のみで終了 |
@@ -332,15 +348,15 @@ curl http://localhost:8000/api/diag/tools
 
 ## 設定画面（Web UI）
 
-画面下部の **`⚙ settings`** ボタンで設定モーダルを開き、`agentweb.json` の内容を
+画面下部の **`⚙ settings`** ボタンで設定モーダルを開き、`tau-web.json` の内容を
 ブラウザから編集・保存できます（デザインは Pi Web のモーダルに合わせています）。
 
-- 保存先のパス（`%APPDATA%\agentweb\agentweb.json`）はモーダル下部に表示されます
+- 保存先のパス（`%APPDATA%\tau-web\tau-web.json`）はモーダル下部に表示されます
 - 保存は `POST /api/config`、取得は `GET /api/config`
 - 表示は localhost のみですが、API キーも画面に表示されます（`type="password"`）
 - `allowTools`（ツール実行の可否）もここで切り替えます（メイン画面にはバッジがありません）
 - **Colorscheme**（`dark` / `light`）もここで切り替えます。選択した時点で即時反映され、
-  **`agentweb.json` の `theme` に保存**されます（ブラウザを変えても維持されます）。
+  **`tau-web.json` の `theme` に保存**されます（ブラウザを変えても維持されます）。
   `localStorage` は起動時のちらつき防止キャッシュとしてのみ使います
 
 ### セッション欄（画面下部・左寄せ）
@@ -401,12 +417,12 @@ curl http://localhost:8000/api/diag/tools
 
 | 保存されるもの | 保存先 | 復元のタイミング |
 |---|---|---|
-| 会話履歴（`messages`） | `%APPDATA%\agentweb\sessions\<id>.json` | セッションを開いたとき |
+| 会話履歴（`messages`） | `%APPDATA%\tau-web\sessions\<id>.json` | セッションを開いたとき |
 | ツール実行の記録（`steps`） | 同上 | 同上 |
 | 思考（`think`） | 同上 | 同上 |
 | **最後に開いていたセッション** | `sessions\_state.json` の `lastSession` | 起動時（`/api/health`） |
 | **入力途中のテキスト（下書き）** | `sessions\_state.json` の `draft` | 起動時（`/api/health`） |
-| 配色（`theme`） | `agentweb.json` | 起動時（`/api/config`） |
+| 配色（`theme`） | `tau-web.json` | 起動時（`/api/config`） |
 | **生成中の途中経過** | サーバのメモリ（`TurnState`） | 起動時・ポーリング時 |
 
 ### 生成途中でリロードした場合
@@ -436,7 +452,7 @@ curl http://localhost:8000/api/diag/tools
 ## セッション管理（Windows AppData に永続化）
 
 会話履歴は**セッション単位**で保存され、再起動後も保持されます。
-保存先は **`%APPDATA%\agentweb\sessions\<セッションID>.json`** です。
+保存先は **`%APPDATA%\tau-web\sessions\<セッションID>.json`** です。
 Web UI 画面下部のセッション欄で切替・新規作成・リネーム・削除ができます。
 **⟳（内容から名前を自動設定）**・**✎（名前変更）**・**×（削除）** のボタンがあります
 （削除時は確認ダイアログを表示）。
@@ -464,8 +480,8 @@ Web UI 画面下部のセッション欄で切替・新規作成・リネーム�
 
 ## 公開運用の注意（公開リポジトリ向け）
 - **API キー・社内 URL・サーバ情報をリポジトリへコミットしない**こと。
-  実際の接続先・キーは **`.gitignore` 済みの `agentweb.json`**
-  （`%APPDATA%\agentweb\agentweb.json`）に置いてください。
+  実際の接続先・キーは **`.gitignore` 済みの `tau-web.json`**
+  （`%APPDATA%\tau-web\tau-web.json`）に置いてください。
 - `shell` などのツール実行を含むため、公開時は利用者本人専用である旨を明記ください。
 
 ## C# 5 / .NET 4.5 対応メモ

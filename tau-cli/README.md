@@ -7,7 +7,7 @@
 
 HTTP サーバも Web UI も持たず、標準入出力だけで対話します。
 `tau` が内部に持つメッセージ（ヘルプ・ツール定義・エラー表示など）は**英語**です。
-**設定もセッションも `tau` 独自のファイル**を使い、`tau-web` とは共有しません。
+**設定もセッションも `tau-cli` 独自のファイル**を使い、`tau-web` とは共有しません。
 
 ---
 
@@ -117,7 +117,7 @@ tau-cli.exe [オプション]
 - **表示中のセッションを削除した場合**は、自動的に別のセッション（無ければ新規）へ切り替わります
 - 削除した ID は「最後に開いていたセッション」からも取り除かれます
 
-`%APPDATA%\tau\sessions\` のファイルを直接消しても構いません（`_state.json` は残してください）。
+`%APPDATA%\tau-cli\sessions\` のファイルを直接消しても構いません（`_state.json` は残してください）。
 
 `Ctrl+C` で生成中の応答を中断できます。
 
@@ -125,18 +125,34 @@ tau-cli.exe [オプション]
 
 ## 設定とデータの保存先
 
-`tau` は `agentweb` とは独立した場所に保存します。
+`tau-cli` は `tau-web` とは独立した場所に保存します。
 
 | 種類 | パス |
 |---|---|
-| 設定 | `%APPDATA%\tau\tau.json` |
-| セッション | `%APPDATA%\tau\sessions\<id>.json` |
-| 最後に開いたセッション | `%APPDATA%\tau\sessions\_state.json` |
+| 設定 | `%APPDATA%\tau-cli\tau.json` |
+| セッション | `%APPDATA%\tau-cli\sessions\<id>.json` |
+| 最後に開いたセッション | `%APPDATA%\tau-cli\sessions\_state.json` |
 
-Linux / macOS では `~/.config/tau/` が使われます。
+Linux / macOS では `~/.config/tau-cli/` が使われます。
 
-> セッションの**ファイル形式**は `agentweb` と同じ（互換）ですが、
-> **保存先は共有しません**。`agentweb` の設定・セッションには一切触れません。
+> セッションの**ファイル形式**は `tau-web` と同じ（互換）ですが、
+> **保存先は共有しません**。`tau-web` の設定・セッションには一切触れません。
+
+### 旧バージョンからの移行
+
+以前のバージョンは `%APPDATA%\tau\` に保存していました。
+起動時に **`%APPDATA%\tau-cli\` が空で、`%APPDATA%\tau\` にデータがある場合**、
+自動でコピーします。
+
+```
+Migrated data from C:\Users\...\AppData\Roaming\tau to
+  C:\Users\...\AppData\Roaming\tau-cli
+  (the old directory was left in place; you can delete it once you are happy)
+```
+
+- コピーのみで、**旧いフォルダは削除しません**（確認後に手動で消してください）
+- 新しい場所に既にデータがある場合は**移行しません**（上書きしない）
+- `--config` でパスを明示した場合は移行しません
 
 ### 環境変数
 
@@ -830,7 +846,7 @@ python3 test_tau.py
 | 行編集の条件 | UTF-8 入力のときだけ有効になるか |
 | フォールバック | リダイレクト時は ReadLine を使うか |
 | `/model` | 任意のモデル名を受け付けるか |
-| セッションの分離 | `%APPDATA%\tau\sessions` に保存し、tau-web 側を汚さないか |
+| セッションの分離 | `%APPDATA%\tau-cli\sessions` に保存し、tau-web 側を汚さないか |
 | セッション形式 | `agentweb` と同じキーで保存されるか |
 | `/config` | 設定一覧を表示し、API キーが伏せ字になるか |
 | `/set` | 値の変更と保存、不正値の拒否ができるか |
@@ -894,7 +910,7 @@ tau-cli/
 | `Program` | エントリポイント、CLI 引数、コンソールのエンコーディングとバッファ設定 |
 | `Config` | `tau.json` と環境変数から設定を読み、未知のキーを保持して保存 |
 | `Json` | 外部ライブラリなしの JSON 解析・生成 |
-| `SessionStore` | `%APPDATA%\tau\sessions` への保存・読み込み・削除 |
+| `SessionStore` | `%APPDATA%\tau-cli\sessions` への保存・読み込み・削除 |
 | `LlmClient` | HTTP 通信、SSE ストリーミング、TLS、再試行、キャンセル |
 | `ToolExecutor` | ツールの定義と実行（ファイル操作・シェルなど） |
 | `Agent` | 1 ターンの実行、ツール呼び出しのループ、文脈の圧縮 |

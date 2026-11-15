@@ -65,6 +65,21 @@ namespace Tau
             if (version) { PrintVersion(); return; }
             if (help) { PrintHelp(); return; }
 
+            // 旧バージョンの %APPDATA%\tau にデータがあれば、
+            // 新しい %APPDATA%\tau-cli へコピーする(初回のみ)。
+            // --config を明示した場合はその場所を使うので移行しない。
+            if (configPath == null || configPath.Trim().Length == 0)
+            {
+                bool migrated = Config.MigrateLegacyData();
+                if (migrated)
+                {
+                    ConsoleUi.Info("Migrated data from "
+                        + Config.LegacyDataDir() + " to " + Config.TauDataDir());
+                    ConsoleUi.Dim("  (the old directory was left in place;"
+                        + " you can delete it once you are happy)\n");
+                }
+            }
+
             Config cfg = new Config(configPath);
 
             // 設定ファイルの inputEncoding に従って、入力を設定し直す。
