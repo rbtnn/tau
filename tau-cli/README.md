@@ -1,20 +1,20 @@
 # tau — コンソール上で動く AI エージェント
 
 `tau` は **コンソール（ターミナル）だけで動く AI エージェント**です。
-同じリポジトリにある `agentweb`（Web UI 版）とは**独立した実装**で、コードの共通化はしていません
-（`agentweb` のソースを参考に、必要な部分を書き起こしています）。
+同じリポジトリにある `tau-web`（Web UI 版）とは**独立した実装**で、コードの共通化はしていません
+（`tau-web` のソースを参考に、必要な部分を書き起こしています）。
 ソースは **クラスごとに 1 ファイル**に分割されています（`src/` 以下）。
 
 HTTP サーバも Web UI も持たず、標準入出力だけで対話します。
 `tau` が内部に持つメッセージ（ヘルプ・ツール定義・エラー表示など）は**英語**です。
-**設定もセッションも `tau` 独自のファイル**を使い、`agentweb` とは共有しません。
+**設定もセッションも `tau` 独自のファイル**を使い、`tau-web` とは共有しません。
 
 ---
 
 ## ビルドと実行（Windows）
 
 ```
-cd tau
+cd tau-cli
 build.bat          … tau.exe をビルド（Windows 添付の csc.exe / 外部ライブラリ不要）
 run.bat            … 起動（未ビルドなら自動でビルド）
 tau.exe            … 直接起動
@@ -830,7 +830,7 @@ python3 test_tau.py
 | 行編集の条件 | UTF-8 入力のときだけ有効になるか |
 | フォールバック | リダイレクト時は ReadLine を使うか |
 | `/model` | 任意のモデル名を受け付けるか |
-| セッションの分離 | `%APPDATA%\tau\sessions` に保存し、agentweb 側を汚さないか |
+| セッションの分離 | `%APPDATA%\tau\sessions` に保存し、tau-web 側を汚さないか |
 | セッション形式 | `agentweb` と同じキーで保存されるか |
 | `/config` | 設定一覧を表示し、API キーが伏せ字になるか |
 | `/set` | 値の変更と保存、不正値の拒否ができるか |
@@ -860,7 +860,7 @@ python3 test_tau.py
 ## ファイル構成
 
 ```
-tau/
+tau-cli/
   src/              ソース（クラスごとに 1 ファイル・外部ライブラリ不要）
     Program.cs              エントリポイント・CLI 引数・コンソール設定
     Config.cs               設定（tau.json）と環境変数
@@ -906,4 +906,4 @@ tau/
 | `Diagnostics` | `--diag` の接続診断 |
 | `SelfTest` | `--test` の自己診断テスト |
 
-`agentweb/`（`AgentWeb.cs` / `index.html` など）は**一切変更していません**。
+`tau-web/`（`AgentWeb.cs` / `index.html` など）は**一切変更していません**。

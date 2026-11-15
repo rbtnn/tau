@@ -6,9 +6,9 @@ rem  build.bat - tau.exe を Windows 添付の csc.exe (C#5 / .NET Framework 4.5) で
 rem  コンパイルします。外部ライブラリは使いません。
 rem
 rem  tau はコンソール上で動く AI エージェントです(Web UI はありません)。
-rem  設定とセッションは agentweb と同じファイルを共有します:
-rem    %APPDATA%\agentweb\agentweb.json
-rem    %APPDATA%\agentweb\sessions\<id>.json
+rem  設定とセッションは tau 独自のファイルを使います:
+rem    %APPDATA%\tau\tau.json
+rem    %APPDATA%\tau\sessions\<id>.json
 rem ---------------------------------------------------------------------------
 
 set "CSC="
