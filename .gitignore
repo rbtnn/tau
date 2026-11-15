@@ -1,5 +1,6 @@
 # ビルド成果物
-aw.exe
+tau-web.exe
+tau-cli.exe
 *.exe
 output/
 
@@ -21,4 +22,4 @@ __pycache__/
 *.pyc
 
 # tau-cli (コンソール版)
-tau-cli/tau.exe
+tau-cli/tau-cli.exe

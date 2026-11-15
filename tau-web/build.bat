@@ -6,7 +6,7 @@ rem  build.bat - Windows 添付の csc.exe (C#5 / .NET Framework 4.5) で
 rem  AI Web サーバをコンパイルします（コンソール版）。外部ライブラリは使いません。
 rem
 rem  Web UI(index.html)は外部ファイルとして配信します(埋め込みなし)。
-rem  aw.exe と同じフォルダに index.html を置いてください(編集後は再ビルド不要)。
+rem  tau-web.exe と同じフォルダに index.html を置いてください(編集後は再ビルド不要)。
 rem
 rem  csc が PATH にあれば使用し、無ければ .NET Framework 標準フォルダから探します。
 rem ---------------------------------------------------------------------------
@@ -63,12 +63,12 @@ if defined PY (
 
 echo [0/1] Using csc: %CSC%
 echo [1/1] Compiling AgentWeb.cs (C#5 / .NET 4.5, console/exe) ...
-"%CSC%" /nologo /optimize+ /target:exe /out:aw.exe AgentWeb.cs
+"%CSC%" /nologo /optimize+ /target:exe /out:tau-web.exe AgentWeb.cs
 if %errorlevel% neq 0 (
     echo [ERROR] コンパイルに失敗しました。
     exit /b 1
 )
 
 echo.
-echo [OK] aw.exe を生成しました(コンソール版)。aw.exe または run.bat で起動してください。
+echo [OK] tau-web.exe を生成しました(コンソール版)。tau-web.exe または run.bat で起動してください。
 endlocal

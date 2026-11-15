@@ -5,7 +5,7 @@
 //  コードは agentweb を参考にしていますが、共通化はしていません。
 //  HTTP サーバ / Web UI を持たず、標準入出力だけで対話します。
 //
-//  ビルド: csc.exe /nologo /out:tau.exe src\*.cs
+//  ビルド: csc.exe /nologo /out:tau-cli.exe src\*.cs
 // ---------------------------------------------------------------------------
 using System;
 using System.Collections.Generic;

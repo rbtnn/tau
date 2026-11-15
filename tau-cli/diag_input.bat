@@ -11,12 +11,12 @@ echo  This script checks, step by step, where tau stops when you
 echo  type a long Japanese prompt.
 echo.
 
-echo [1] Version of tau.exe
-if not exist "tau.exe" (
-    echo     tau.exe not found. Run build.bat first.
+echo [1] Version of tau-cli.exe
+if not exist "tau-cli.exe" (
+    echo     tau-cli.exe not found. Run build.bat first.
     goto :eof
 )
-tau.exe --version
+tau-cli.exe --version
 echo.
 
 echo [2] Console code page
@@ -30,7 +30,7 @@ echo     NO_COLOR        = %NO_COLOR%
 echo.
 
 echo [4] Configuration
-tau.exe --config "%APPDATA%\tau\tau.json" --list >nul 2>nul
+tau-cli.exe --config "%APPDATA%\tau\tau.json" --list >nul 2>nul
 echo     (see %APPDATA%\tau\tau.json)
 echo.
 
@@ -40,13 +40,13 @@ echo  Type a LONG Japanese sentence below and press Enter.
 echo  Then type /exit and press Enter.
 echo.
 set TAU_DEBUG=1
-tau.exe
+tau-cli.exe
 echo ------------------------------------------------------------
 echo.
 
 echo [6] If tau printed nothing after Enter, run the same text
 echo     through a file to see whether input is the problem:
 echo       notepad input.txt
-echo       tau.exe ^< input.txt
+echo       tau-cli.exe ^< input.txt
 echo.
 pause

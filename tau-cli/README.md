@@ -15,9 +15,9 @@ HTTP サーバも Web UI も持たず、標準入出力だけで対話します�
 
 ```
 cd tau-cli
-build.bat          … tau.exe をビルド（Windows 添付の csc.exe / 外部ライブラリ不要）
+build.bat          … tau-cli.exe をビルド（Windows 添付の csc.exe / 外部ライブラリ不要）
 run.bat            … 起動（未ビルドなら自動でビルド）
-tau.exe            … 直接起動
+tau-cli.exe            … 直接起動
 ```
 
 `build.bat` は `%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe` を探して
@@ -26,8 +26,8 @@ tau.exe            … 直接起動
 Linux / macOS では `mono` の `mcs` でビルドできます。
 
 ```
-mcs -langversion:5 -out:tau.exe src/*.cs
-mono tau.exe
+mcs -langversion:5 -out:tau-cli.exe src/*.cs
+mono tau-cli.exe
 ```
 
 ---
@@ -35,7 +35,7 @@ mono tau.exe
 ## 使い方
 
 ```
-tau.exe [オプション]
+tau-cli.exe [オプション]
 
   --config <path>    設定ファイル（tau.json）のパス
   --session <id>     既存セッションを開いて続きから対話する
@@ -297,7 +297,7 @@ tau.json:
   The input has been lost 2 times in a row; stopping here.
   Change the console code page (chcp 65001) and start tau again,
   or write your text to a file and pipe it in:
-    tau.exe < input.txt
+    tau-cli.exe < input.txt
 ```
 
 `tau --diag` でも現在の入出力エンコーディングを確認できます。
@@ -427,10 +427,10 @@ A=1
 ### 動かないときの確認
 
 まず **どのビルドを動かしているか** を確認してください。
-古い `tau.exe` が残っていると、修正が反映されません。
+古い `tau-cli.exe` が残っていると、修正が反映されません。
 
 ```
-tau.exe --version
+tau-cli.exe --version
 ```
 
 `run.bat` はソースが新しい場合に自動でビルドし直すようにしました。
@@ -439,7 +439,7 @@ tau.exe --version
 
 ```
 set TAU_DEBUG=1
-tau.exe
+tau-cli.exe
 ```
 
 次のように、段階ごとに表示されます。
@@ -462,8 +462,8 @@ tau.exe
 まとめて確認します。失敗があれば終了コード 1 を返します。
 
 ```
-tau.exe --test            … すべて確認（API へのリクエストを含む）
-tau.exe --test=offline    … ネットワークを使わずに確認（CI 向け）
+tau-cli.exe --test            … すべて確認（API へのリクエストを含む）
+tau-cli.exe --test=offline    … ネットワークを使わずに確認（CI 向け）
 ```
 
 | # | 項目 | 内容 |
@@ -693,7 +693,7 @@ HTTP エラーや証明書エラーは、繰り返しても結果が変わらな
 うまく接続できない場合は、**接続診断**を実行してください。
 
 ```
-tau.exe --diag
+tau-cli.exe --diag
 ```
 
 環境情報（.NET / Mono / OS / 既定の TLS）、接続先の DNS、**TLS の各バージョンでの接続可否**、
@@ -740,7 +740,7 @@ TLS の接続試験が NG でも、それは試験方法の差であり、
 さらに詳しく見たい場合は**デバッグ出力**を有効にします。
 
 ```
-tau.exe --debug            (または環境変数 TAU_DEBUG=1)
+tau-cli.exe --debug            (または環境変数 TAU_DEBUG=1)
 ```
 
 リクエストの設定（TLS・プロキシ・HTTP バージョン・タイムアウト）、応答ヘッダ、
@@ -791,7 +791,7 @@ TLS などの内部エラーは**内部例外のメッセージ**も併記しま
 
 ## テスト
 
-`test_tau.py` がモック LLM を立てて `tau.exe` を実際に起動し、実行時の挙動を検証します
+`test_tau.py` がモック LLM を立てて `tau-cli.exe` を実際に起動し、実行時の挙動を検証します
 （`mono` と `mcs` が必要）。
 
 ```

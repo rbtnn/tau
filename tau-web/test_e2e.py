@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """test_e2e.py - 実行時回帰テスト (Linux / macOS / WSL, mono + mcs が必要)
 
-モック LLM サーバを立てて実際に aw.exe を起動し、実行時にしか検出できない不具合を検査する。
+モック LLM サーバを立てて実際に tau-web.exe を起動し、実行時にしか検出できない不具合を検査する。
 特に「同名オーバーロードの相互再帰 → StackOverflowException」はコンパイルでは分からないため、
 実際に 1 ターン走らせて落ちないことを確認する。
 
@@ -299,7 +299,7 @@ def run(keep=False):
         return 0
 
     tmp = tempfile.mkdtemp(prefix="agentweb_e2e_")
-    exe = os.path.join(tmp, "aw.exe")
+    exe = os.path.join(tmp, "tau-web.exe")
     try:
         cmd = [comp, "/nologo", "/target:exe", "/out:" + exe]
         if kind == "mcs":
@@ -309,7 +309,7 @@ def run(keep=False):
         if p.returncode != 0:
             fail("ビルド失敗:\n" + p.stdout.decode("utf-8", "replace"))
             return 1
-        ok("aw.exe をビルドしました (%s)" % kind)
+        ok("tau-web.exe をビルドしました (%s)" % kind)
 
         # --- ケース 1+2: ストリーミング + ツールループ ---
         mock, mport = start_mock(plain=False)

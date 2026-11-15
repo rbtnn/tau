@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """tau の実行時回帰テスト。
 
-モック LLM を立てて tau.exe を実際に起動し、
+モック LLM を立てて tau-cli.exe を実際に起動し、
   1. ストリーミング表示(思考 + 本文)
   2. ツール実行ループ
   3. agentweb と同じセッション形式で保存されること
@@ -227,14 +227,14 @@ class MockTruncate(BaseHTTPRequestHandler):
 def main():
     # ソースの静的チェック用(クラスごとに分割されているので連結する)
     tls_src = "".join(open(f, encoding="utf-8").read() for f in SRC_FILES)
-    exe = os.path.join(tempfile.mkdtemp(prefix="tau_build_"), "tau.exe")
+    exe = os.path.join(tempfile.mkdtemp(prefix="tau_build_"), "tau-cli.exe")
     print("=== tau 実行時回帰テスト ===")
     rc = subprocess.run(["mcs", "-langversion:5", "-out:" + exe] + SRC_FILES,
                         capture_output=True, text=True)
     if rc.returncode != 0:
-        bad("tau.exe のビルドに失敗しました:\n" + rc.stdout + rc.stderr)
+        bad("tau-cli.exe のビルドに失敗しました:\n" + rc.stdout + rc.stderr)
         return 1
-    ok("tau.exe をビルドしました")
+    ok("tau-cli.exe をビルドしました")
 
     # tau 独自の場所を使う(テスト用に HOME を差し替える)
     work = tempfile.mkdtemp(prefix="tau_home_")

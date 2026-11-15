@@ -434,7 +434,7 @@ def compile_check():
             # dotnet では単一ファイルの手軽なコンパイルが難しいため mcs/csc を優先
             warn("dotnet のみ検出。単一 .cs の検証は csc / mcs を推奨します")
             return
-        out = os.path.join(tmpdir, "aw_check.exe")
+        out = os.path.join(tmpdir, "tau_web_check.exe")
         cmd = [path, "/nologo", "/target:exe", "/out:" + out]
         if kind == "mcs":
             # build.bat は .NET 4.5 / C#5 の csc.exe を使うため、同じ言語版で検査する

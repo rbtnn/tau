@@ -8,7 +8,7 @@ Windows に同梱の **`csc.exe`（C# 5 / .NET Framework 4.5）** でコンパ�
 
 - 組込み HTTP サーバ（`http://localhost:8000/`）+ Web UI
 - OpenAI 互換 LLM API 連携 + ツール実行（shell / read_file / write_file / list_dir / curl）
-- **コンソールアプリ**として常駐起動（`aw.exe` を実行するだけ）、スタートアップ登録も可能
+- **コンソールアプリ**として常駐起動（`tau-web.exe` を実行するだけ）、スタートアップ登録も可能
 - セッション管理（AppData 永続化・画面下部のドロップダウン）と pi 方式のコンパクション
 - 各メッセージ右上の**コピーボタン**で内容をクリップボードへコピー（普段は非表示・ホバーで表示）
 - 応答待ちの間は**3点ドットのアニメーション**を表示（thinking 非対応モデルでも動作中が分かる）
@@ -20,16 +20,16 @@ Windows に同梱の **`csc.exe`（C# 5 / .NET Framework 4.5）** でコンパ�
 |---|---|
 | `AgentWeb.cs` | 本体（単一ソース）。HTTP サーバ + LLM クライアント + JSON エンジン |
 | `index.html` | Web UI（外部ファイル。`GET /` で直接配信。編集後は再ビルド不要） |
-| `build.bat` | `csc.exe` で **コンソール版** `aw.exe` をビルド（CP932/CRLF） |
-| `run.bat` | ビルド済み `aw.exe`（コンソール版）を起動する補助スクリプト |
+| `build.bat` | `csc.exe` で **コンソール版** `tau-web.exe` をビルド（CP932/CRLF） |
+| `run.bat` | ビルド済み `tau-web.exe`（コンソール版）を起動する補助スクリプト |
 | `check_consistency.py` | `AgentWeb.cs`（サーバ）と `index.html`（UI）の整合性チェック |
 | `check.bat` | 上記チェックを実行する補助スクリプト（Windows） |
 | `check.sh` | 上記チェックを実行する補助スクリプト（Linux / macOS / WSL） |
-| `test_e2e.py` | モック LLM を立てて実際に `aw.exe` を走らせる実行時回帰テスト（要 `mono` + `mcs`） |
+| `test_e2e.py` | モック LLM を立てて実際に `tau-web.exe` を走らせる実行時回帰テスト（要 `mono` + `mcs`） |
 | `README.md` | 本ドキュメント |
 
 > `build.bat` は **DOS(CRLF) + CP932(Shift-JIS)**、`AgentWeb.cs` は **UTF-8(BOM付き)** です。
-> `index.html` は **`aw.exe` と同じフォルダ**に置いてください（`bindPath` で変更可能）。
+> `index.html` は **`tau-web.exe` と同じフォルダ**に置いてください（`bindPath` で変更可能）。
 
 ### 外部依存ゼロの内訳
 - **HTTP サーバ** … `System.Net.Sockets.TcpListener` による独自実装
@@ -44,8 +44,8 @@ Windows に同梱の **`csc.exe`（C# 5 / .NET Framework 4.5）** でコンパ�
 ```bat
 cd agentweb
 build.bat
-:: （csc は自動検索。コンソール版 aw.exe を生成）
-:: 生成後は aw.exe（または run.bat）で起動します
+:: （csc は自動検索。コンソール版 tau-web.exe を生成）
+:: 生成後は tau-web.exe（または run.bat）で起動します
 ```
 
 ## 設定（agentweb.json）
@@ -57,9 +57,9 @@ build.bat
 %APPDATA%\agentweb\sessions\<id>.json    ← セッション
 ```
 
-- 旧バージョンで `aw.exe` と同じフォルダに置いていた `agentweb.json` は、
+- 旧バージョンで `tau-web.exe` と同じフォルダに置いていた `agentweb.json` は、
   初回起動時に自動で新しい場所へ移行されます（新しい場所にファイルが無い場合のみ）。
-- 旧配置（`aw.exe` と同じフォルダ）のファイルは、**新しい場所にファイルが無い場合のみ**読み込まれます。
+- 旧配置（`tau-web.exe` と同じフォルダ）のファイルは、**新しい場所にファイルが無い場合のみ**読み込まれます。
 - **Web 画面の `⚙ settings` から編集・保存できます**（保存後は即時反映。ポート変更のみ再起動が必要）。
 
 設定項目は次のとおりです（`⚙ settings` からも同じ項目を編集できます）。
@@ -152,15 +152,15 @@ build.bat
 
 ## 実行（コンソール）
 
-- `aw.exe` は **コンソールアプリ**です。実行するとコンソールに起動情報を表示し、
+- `tau-web.exe` は **コンソールアプリ**です。実行するとコンソールに起動情報を表示し、
   `http://localhost:<port>/` で待ち受けます。
 - 画面には接続先（URL）、使用モデル、設定ファイルのパスが表示されます。
 - **`Ctrl+C`** で停止できます。
 - `openBrowserOnStart`（既定 `true`）の場合、起動時に既定のブラウザで UI を開きます。
-- オプション： `aw.exe --port 8080` / `--config <path>` / `--help`
+- オプション： `tau-web.exe --port 8080` / `--config <path>` / `--help`
 
 ### スタートアップ（自動起動）登録
-Windows の**スタートアップフォルダ**に `aw.exe` へのショートカットを置くだけで、
+Windows の**スタートアップフォルダ**に `tau-web.exe` へのショートカットを置くだけで、
 ログオン時に自動起動できます（コンソールウィンドウが表示されます）。
 
 ## 整合性チェック（サーバ／UI）
@@ -205,7 +205,7 @@ python3 check_consistency.py
 ### 実行時回帰テスト（Linux / macOS / WSL）
 
 静的チェックでは見つからない**実行時にしか出ない不具合**（無限再帰による
-`StackOverflowException` など）は、`test_e2e.py` がモック LLM を立てて実際に `aw.exe` を
+`StackOverflowException` など）は、`test_e2e.py` がモック LLM を立てて実際に `tau-web.exe` を
 起動し、1 ターン走らせて検証します（`mono` と `mcs`/`csc` が必要）。
 
 ```sh
@@ -302,7 +302,7 @@ node test_mermaid.js /tmp/mm.js
 
 ## トラブルシューティング（ツールが実行されない場合）
 
-`aw.exe` はコンソール版なので、実行中のログがそのまま表示されます。ツールが呼ばれない場合は次を確認してください。
+`tau-web.exe` はコンソール版なので、実行中のログがそのまま表示されます。ツールが呼ばれない場合は次を確認してください。
 
 | ログ | 意味 / 対処 |
 |---|---|

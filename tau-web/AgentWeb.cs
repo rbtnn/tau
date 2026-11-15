@@ -17,8 +17,8 @@
 //    - LlmClient       : HttpWebRequest による LLM API (チャット) 呼び出し
 //    - Json            : 最小 JSON パーサ / シリアライザ (自己完結)
 //
-//  コンパイル:  csc /nologo /out:aw.exe AgentWeb.cs
-//  実行:        aw.exe
+//  コンパイル:  csc /nologo /out:tau-web.exe AgentWeb.cs
+//  実行:        tau-web.exe
 // ============================================================================
 using System;
 using System.Collections.Generic;
@@ -67,7 +67,7 @@ namespace AgentWeb
         static void PrintHelp()
         {
             Console.WriteLine("agentweb - 自己完結型ローカルWeb UIを備えたAIエージェント");
-            Console.WriteLine("使用法: aw.exe [オプション]");
+            Console.WriteLine("使用法: tau-web.exe [オプション]");
             Console.WriteLine("  --config <path>   設定ファイル(agentweb.json)のパス");
             Console.WriteLine("  --port <n>        ポート番号 (既定 8000)");
         }
@@ -545,7 +545,7 @@ namespace AgentWeb
                 return TextResponse(500, "index.html read error: " + ex.Message, "text/plain; charset=utf-8");
             }
             return TextResponse(500,
-                "index.html が見つかりません。aw.exe と同じフォルダに index.html を置いてください。\n検索パス: " + full,
+                "index.html が見つかりません。tau-web.exe と同じフォルダに index.html を置いてください。\n検索パス: " + full,
                 "text/plain; charset=utf-8");
         }
 
