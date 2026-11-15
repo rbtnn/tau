@@ -5,7 +5,7 @@
 //  コードは agentweb を参考にしていますが、共通化はしていません。
 //  HTTP サーバ / Web UI を持たず、標準入出力だけで対話します。
 //
-//  ビルド: csc.exe /nologo /out:tau-cli.exe src\*.cs
+//  ビルド: csc.exe /nologo /out:tau.exe src\*.cs
 // ---------------------------------------------------------------------------
 using System;
 using System.Collections.Generic;
@@ -459,7 +459,7 @@ namespace Tau
             return sb.ToString();
         }
 
-        // ビルド識別子。古い tau-cli.exe を動かしていないか確認できるようにする。
+        // ビルド識別子。古い tau.exe を動かしていないか確認できるようにする。
         public const string BuildStamp = "2026-02-27 test-hooks";
 
         internal static void PrintVersion()
@@ -480,7 +480,7 @@ namespace Tau
         {
             Console.WriteLine("tau - AI agent that runs in the console");
             Console.WriteLine();
-            Console.WriteLine("Usage: tau-cli.exe [options]");
+            Console.WriteLine("Usage: tau.exe [options]");
             Console.WriteLine("  --config <path>    Path to the config file (tau.json)");
             Console.WriteLine("  --session <id>     Open an existing session and continue it");
             Console.WriteLine("  --version          Show the build stamp and exit");

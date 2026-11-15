@@ -5,7 +5,7 @@
 
 | ディレクトリ | 内容 | 実行ファイル |
 |---|---|---|
-| [`tau-cli/`](tau-cli/) | **コンソール（ターミナル）版**。標準入出力だけで対話する | `tau-cli.exe` |
+| [`tau-cli/`](tau-cli/) | **コンソール（ターミナル）版**。標準入出力だけで対話する | `tau.exe` |
 | [`tau-web/`](tau-web/) | **Web UI 版**。ローカル HTTP サーバ + ブラウザ UI | `tau-web.exe` |
 
 2 つは**コードを共有していません**。それぞれ単体でビルド・実行できます。
@@ -14,11 +14,11 @@
 
 ```
 cd tau-cli
-build.bat          … tau-cli.exe をビルド（Windows 添付の csc.exe / 外部ライブラリ不要）
-run.bat            … 起動
-tau-cli.exe        … 直接起動
-tau-cli.exe --test … 自己診断テスト
-tau-cli.exe --diag … 接続診断
+build.bat           … tau.exe をビルド（Windows 添付の csc.exe / 外部ライブラリ不要）
+run.bat             … 起動
+tau.exe             … 直接起動
+tau.exe --test      … 自己診断テスト
+tau.exe --diag      … 接続診断
 ```
 
 - HTTP サーバも Web UI も持たず、**ターミナルだけで完結**

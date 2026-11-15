@@ -5,7 +5,7 @@
 //  コードは agentweb を参考にしていますが、共通化はしていません。
 //  HTTP サーバ / Web UI を持たず、標準入出力だけで対話します。
 //
-//  ビルド: csc.exe /nologo /out:tau-cli.exe src\*.cs
+//  ビルド: csc.exe /nologo /out:tau.exe src\*.cs
 // ---------------------------------------------------------------------------
 using System;
 using System.Collections.Generic;
@@ -181,7 +181,7 @@ namespace Tau
                             + " times in a row; stopping here.\n");
                         ConsoleUi.Dim("  Change the console code page (chcp 65001) and start tau again,\n");
                         ConsoleUi.Dim("  or write your text to a file and pipe it in:\n");
-                        ConsoleUi.Dim("    tau-cli.exe < input.txt\n");
+                        ConsoleUi.Dim("    tau.exe < input.txt\n");
                         break;
                     }
                     continue;

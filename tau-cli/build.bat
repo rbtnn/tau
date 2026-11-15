@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 rem ---------------------------------------------------------------------------
-rem  build.bat - tau-cli.exe を Windows 添付の csc.exe (C#5 / .NET Framework 4.5) で
+rem  build.bat - tau.exe を Windows 添付の csc.exe (C#5 / .NET Framework 4.5) で
 rem  コンパイルします。外部ライブラリは使いません。
 rem
 rem  tau はコンソール上で動く AI エージェントです(Web UI はありません)。
@@ -33,7 +33,7 @@ if not defined CSC (
 )
 
 echo コンパイル中: src\*.cs
-"%CSC%" /nologo /target:exe /out:tau-cli.exe /langversion:5 /optimize+ src\*.cs
+"%CSC%" /nologo /target:exe /out:tau.exe /langversion:5 /optimize+ src\*.cs
 if errorlevel 1 (
     echo.
     echo [ERROR] コンパイルに失敗しました。
@@ -41,7 +41,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo ビルド完了: tau-cli.exe
-echo   実行: tau-cli.exe
-echo   ヘルプ: tau-cli.exe --help
+echo ビルド完了: tau.exe
+echo   実行: tau.exe
+echo   ヘルプ: tau.exe --help
 endlocal
