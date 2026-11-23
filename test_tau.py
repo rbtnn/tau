@@ -227,18 +227,35 @@ class MockTruncate(BaseHTTPRequestHandler):
 def main():
     # ソースの静的チェック用(クラスごとに分割されているので連結する)
     tls_src = "".join(open(f, encoding="utf-8").read() for f in SRC_FILES)
-    exe = os.path.join(tempfile.mkdtemp(prefix="tau_build_"), "tau.exe")
     print("=== tau 実行時回帰テスト ===")
-    rc = subprocess.run(["mcs", "-langversion:5", "-out:" + exe] + SRC_FILES,
-                        capture_output=True, text=True)
+
+    # dotnet でビルドする(単一ファイルではなく DLL + ホストで実行)
+    build_dir = tempfile.mkdtemp(prefix="tau_build_")
+    rc = subprocess.run(
+        ["dotnet", "build", os.path.join(HERE, "tau-cli.csproj"),
+         "-c", "Release", "-o", build_dir],
+        capture_output=True, text=True)
     if rc.returncode != 0:
-        bad("tau.exe のビルドに失敗しました:\n" + rc.stdout + rc.stderr)
+        bad("ビルドに失敗しました:\n" + rc.stdout + rc.stderr)
         return 1
-    ok("tau.exe をビルドしました")
+    ok("tau をビルドしました")
+
+    # 実行方法: DLL を dotnet で起動する
+    dll = os.path.join(build_dir, "tau.dll")
+    if not os.path.exists(dll):
+        cand = glob.glob(os.path.join(build_dir, "**", "tau.dll"), recursive=True)
+        if cand:
+            dll = cand[0]
+    if not os.path.exists(dll):
+        bad("tau.dll が見つかりません: " + build_dir)
+        return 1
+
+    def tau_cmd(args=None):
+        return ["dotnet", dll] + (args or [])
 
     # tau 独自の場所を使う(テスト用に HOME を差し替える)
     work = tempfile.mkdtemp(prefix="tau_home_")
-    appdata = os.path.join(work, ".config", "tau")
+    appdata = os.path.join(work, ".config", "tau-cli")
     os.makedirs(appdata, exist_ok=True)
     # agentweb 側のディレクトリも作り、混ざらないことを確認できるようにする
     agentweb_dir = os.path.join(work, ".config", "agentweb")
@@ -274,13 +291,13 @@ def main():
         env.pop(k, None)
 
     def run_tau(stdin_text, args=None, timeout=60, extra_env=None):
-        cmd = ["mono", exe] + (args or [])
+        cmd = tau_cmd(args)
         e = dict(env)
         if extra_env:
             e.update(extra_env)
         p = subprocess.run(cmd, input=stdin_text, capture_output=True,
                            text=True, env=e, timeout=timeout,
-                           cwd=os.path.dirname(exe))
+                           cwd=HERE)
         return p.stdout + p.stderr
 
     # agentweb 側に別の設定を置いておく(tau が触らないこと)
@@ -751,12 +768,10 @@ def main():
         bad("長い日本語で応答がありません: " + out[-300:])
     # 保存された内容が欠けていないこと
     # セッションは TauDataDir()/sessions に保存される(--config とは別)
-    sess = sorted(glob.glob(os.path.join(work, "config", "tau", "sessions", "*.json")))
-    if not sess:
-        sess = sorted(glob.glob(os.path.join(work, ".config", "tau", "sessions", "*.json")))
+    sess = sorted(glob.glob(os.path.join(work, ".config", "tau-cli", "sessions", "*.json")))
     if not sess:
         sess = sorted(glob.glob(os.path.join(os.path.expanduser("~"),
-                                             ".config", "tau", "sessions", "*.json")))
+                                             ".config", "tau-cli", "sessions", "*.json")))
     saved = None
     for fn in sess:
         try:
@@ -841,16 +856,16 @@ def main():
     # 他のテストのセッションを壊さないよう、専用のデータディレクトリを使う
     long_home = os.path.join(work, "longhome")
     long_xdg = os.path.join(long_home, ".config")
-    if not os.path.isdir(os.path.join(long_xdg, "tau", "sessions")):
-        os.makedirs(os.path.join(long_xdg, "tau", "sessions"))
+    if not os.path.isdir(os.path.join(long_xdg, "tau-cli", "sessions")):
+        os.makedirs(os.path.join(long_xdg, "tau-cli", "sessions"))
     for nbytes in (255, 300, 512):
-        for fn in glob.glob(os.path.join(long_xdg, "tau", "sessions", "*.json")):
+        for fn in glob.glob(os.path.join(long_xdg, "tau-cli", "sessions", "*.json")):
             os.remove(fn)
         text = make_mixed(nbytes)
         run_tau(text + "\n/exit\n", args=["--config", long_cfg],
                 extra_env={"HOME": long_home, "XDG_CONFIG_HOME": long_xdg})
         saved = None
-        for fn in glob.glob(os.path.join(long_xdg, "tau", "sessions", "*.json")):
+        for fn in glob.glob(os.path.join(long_xdg, "tau-cli", "sessions", "*.json")):
             try:
                 d = json.load(open(fn, encoding="utf-8-sig"))
                 for m in d.get("messages", []):
@@ -989,8 +1004,8 @@ def main():
     import signal as _signal
     import select as _select
     _master, _slave = _pty.openpty()
-    p = subprocess.Popen(["mono", exe], stdin=_slave, stdout=_slave,
-                         stderr=_slave, env=env, cwd=os.path.dirname(exe))
+    p = subprocess.Popen(tau_cmd(), stdin=_slave, stdout=_slave,
+                         stderr=_slave, env=env, cwd=HERE)
     os.close(_slave)
     time.sleep(3.0)
     _alive0 = p.poll() is None
@@ -1469,7 +1484,7 @@ def main():
     o = run_tau("", args=["--test", "--config", api_cfg], timeout=120)
     api_srv.shutdown(); api_srv.server_close()
 
-    if "11. LLM API request (real HTTP)" in o:
+    if "12. LLM API request (real HTTP)" in o:
         ok("--test が LLM API リクエストを含みます")
     else:
         bad("--test に LLM API リクエストがありません")
@@ -1583,61 +1598,62 @@ def main():
     ok("JSON テストの主要項目がそろっています")
 
     # ---- 7. TLS 設定 ----
-    # .NET Framework 4.7 未満では既定が TLS 1.0 相当になり、
-    # TLS 1.2 以上を要求する API で
-    #   「SSL/TLS のセキュリティで保護されているチャネルを作成できませんでした」
-    # になる。EnsureTls() が SystemDefault / Tls12 以上を設定していることを確認する。
-    if "ApplyTls" in tls_src and "ServicePointManager.SecurityProtocol" in tls_src:
-        ok("TLS バージョンを設定する処理(ApplyTls)があります")
+    # .NET 10 では ServicePointManager は廃止扱いで HttpClient に効かない。
+    # SocketsHttpHandler.SslOptions に TLS 1.2 以上を設定していることを確認する。
+    if "ApplyTlsTo" in tls_src and "SslOptions" in tls_src:
+        ok("TLS バージョンをハンドラに設定する処理(ApplyTlsTo)があります")
     else:
-        bad("ApplyTls がありません")
-    if "SecurityProtocolType.Tls12" in tls_src and "SystemDefault" not in tls_src.split("public static void ApplyTls")[1].split("public static")[0]:
-        ok("ApplyTls は SystemDefault を使わず Tls12 に固定しています")
+        bad("ApplyTlsTo がありません")
+    if "SslProtocols.Tls12" in tls_src and "SslProtocols.Tls13" in tls_src:
+        ok("TLS 1.2 以上を有効にしています")
     else:
-        bad("ApplyTls が SystemDefault を使っています")
-    if "SecurityProtocolType.Tls12" in tls_src:
-        ok("第 2 段で TLS 1.2 を明示するフォールバックがあります")
+        bad("TLS 1.2 が有効化されていません")
+    if "PreferredTls" in tls_src:
+        ok("使う TLS バージョンが 1 箇所にまとまっています")
     else:
-        bad("TLS 1.2 のフォールバックがありません")
-    if "EscalateTls" in tls_src and "IsTlsFailure" in tls_src:
-        ok("TLS 失敗を検出して一段上げる処理があります")
+        bad("TLS バージョンの定義がありません")
+    # 廃止 API をコードで使っていないこと(案内文に名前が出るのは可)
+    code_without_docs = "\n".join(
+        line for line in tls_src.split("\n")
+        if not line.strip().startswith("//")
+        and not line.strip().startswith("ConsoleUi.")
+        and not line.strip().startswith("Console."))
+    if "ServicePointManager" not in code_without_docs:
+        ok("廃止された ServicePointManager を使っていません")
     else:
-        bad("TLS 失敗時のエスカレーションがありません")
-    if "SecureChannelFailure" in tls_src:
-        ok("SecureChannelFailure を TLS 失敗として扱います")
+        bad("ServicePointManager が残っています")
+    if "HttpWebRequest" not in code_without_docs:
+        ok("廃止された HttpWebRequest を使っていません")
     else:
-        bad("SecureChannelFailure の判定がありません")
-    # Tls12 に Tls13 を混ぜると「SslProtocolType で有効ではありません」になるため、
-    # Tls12 を単独で指定していること。
-    if "SecurityProtocolType.Tls12 |" not in tls_src and "| (SecurityProtocolType)t13" not in tls_src:
-        ok("TLS 1.3 を OR で混ぜていません(Tls12 単独指定)")
+        bad("HttpWebRequest が残っています")
+    if "HttpClient" in tls_src:
+        ok("HttpClient を使っています")
     else:
-        bad("Tls12 に Tls13 を混ぜています(無効なプロトコル指定になる)")
-    if "if (tlsApplied) return false;" in tls_src:
-        ok("TLS 適用済みなら再試行しない(無限再試行しない)")
+        bad("HttpClient が使われていません")
+    if "SocketsHttpHandler" in tls_src:
+        ok("SocketsHttpHandler で接続を制御しています")
     else:
-        bad("再試行の段数制御がありません")
-    # 実測された症状: Status=ReceiveFailure + 内部例外
-    # 「指定された値は 'SslProtocolType' 列挙で有効ではありません」
-    # も TLS の設定不備として再試行対象にする必要がある。
-    if "SslProtocol" in tls_src and "ArgumentException" in tls_src:
-        ok("SslProtocolType の無効値エラーも TLS 失敗として扱います")
+        bad("SocketsHttpHandler が使われていません")
+    # 証明書エラーは再試行対象外
+    if "AuthenticationException" in tls_src and "certificate" in tls_src:
+        ok("証明書エラーは TLS 失敗として扱いません")
     else:
-        bad("SslProtocolType エラーの判定がありません")
-    if "TrustFailure" in tls_src:
-        ok("証明書エラー(TrustFailure)は再試行対象外です")
+        bad("証明書エラーの除外がありません")
+    # TLS 失敗の判定
+    if "IsTlsFailure" in tls_src and "Authentication" in tls_src:
+        ok("TLS 失敗を検出します")
     else:
-        bad("TrustFailure の除外がありません")
-    # SystemDefault(0) は列挙値として存在しても OS 既定が TLS1.0 のままになる環境があるため、
-    # 「存在するから使う」で終わらせず、失敗時に TLS 1.2 へ上がることを確認する。
+        bad("TLS 失敗の検出がありません")
+    # 再試行の段数制御
+    if "MAX_ATTEMPTS" in tls_src:
+        ok("再試行回数の上限があります")
+    else:
+        bad("再試行の上限がありません")
+    # 両方の呼び出し経路が再試行ループを持つ
     if tls_src.count("CallStreamOnce") >= 2 and tls_src.count("CallOnceInternal") >= 2:
         ok("ストリーミング/非ストリーミングの両方で再試行します")
     else:
-        bad("再試行の実装が足りません")
-    if tls_src.count("ApplyTls()") >= 2:
-        ok("LLM 呼び出しと curl ツールの両方で TLS 設定を適用しています")
-    else:
-        bad("TLS 設定の適用箇所が足りません: %d" % tls_src.count("ApplyTls()"))
+        bad("再試行の配線が欠けています")
 
     # ---- 7a. 未使用の定数が無いこと ----
     # KIND_* は出力の種類。使われていない定数があるとコンパイラ警告になる。
@@ -1696,7 +1712,7 @@ def main():
         ok("--diag が対話と同じストリーミング経路も試験します")
     else:
         bad("ストリーミング経路の試験がありません")
-    if "IsBypassed" in tls_src:
+    if "DescribeProxy" in tls_src:
         ok("プロキシ表示が直接接続かどうかを区別します")
     else:
         bad("プロキシ表示が誤解を招く形式のままです")
@@ -1708,11 +1724,11 @@ def main():
         ok("一時的な失敗をバックオフ付きで再試行します")
     else:
         bad("再試行の回数/待機がありません")
-    if "ProtocolError" in tls_src and "TrustFailure" in tls_src:
+    if "StatusCode" in tls_src and "AuthenticationException" in tls_src:
         ok("HTTP エラーと証明書エラーは再試行しません")
     else:
         bad("再試行除外の判定がありません")
-    if "runtime=" in out and "SecurityProtocol=" in out:
+    if "runtime=" in out and ("TLS=" in out or "SecurityProtocol=" in out):
         ok("--diag が環境情報を表示します")
     else:
         bad("--diag の環境情報がありません")

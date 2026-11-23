@@ -101,7 +101,8 @@ namespace Tau
 
             // Ctrl-C はプロセスを終了させず、現在のターンだけ中止する。
             // e.Cancel = true で既定の終了動作を抑止する。
-            Console.CancelKeyPress += (sender, e) => {
+            Console.CancelKeyPress += (sender, e) =>
+            {
                 e.Cancel = true;          // プロセスを終了しない
                 ctrlCPressed = true;
                 cancelled = true;         // 実行中のターンを中止する
@@ -602,7 +603,8 @@ namespace Tau
             {
                 string reply = agent.RunStream(ctx, userMessage,
                     (c) => { Save(c); },
-                    (d) => {
+                    (d) =>
+                    {
                         // 本文はバッファする(Markdown として整形して表示するため)
                         if (kind != KIND_CONTENT)
                         {
@@ -615,7 +617,8 @@ namespace Tau
                         // 受信した文字数を進行状況として表示する。
                         ShowProgress(contentBuf.Length);
                     },
-                    (d) => {
+                    (d) =>
+                    {
                         if (kind != KIND_THINK)
                         {
                             if (kind != KIND_NONE) Console.WriteLine();
@@ -625,7 +628,8 @@ namespace Tau
                         }
                         ConsoleUi.Think(d);
                     },
-                    (name, detail) => {
+                    (name, detail) =>
+                    {
                         ClearProgress();
                         // ツール実行は必ず単独の行にする
                         if (kind != KIND_NONE) Console.WriteLine();

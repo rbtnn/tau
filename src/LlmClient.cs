@@ -109,7 +109,8 @@ namespace Tau
             {
                 handler.SslOptions.EnabledSslProtocols = PreferredTls;
                 handler.SslOptions.RemoteCertificateValidationCallback =
-                    (sender, cert, chain, errors) => {
+                    (sender, cert, chain, errors) =>
+                    {
                         return (errors == SslPolicyErrors.None);
                     };
             }
@@ -573,101 +574,101 @@ namespace Tau
                     using (Stream rs = resp.Content.ReadAsStream(cts.Token))
                     using (StreamReader sr = new StreamReader(rs, Encoding.UTF8))
                     {
-                    if (ctype.IndexOf("event-stream", StringComparison.OrdinalIgnoreCase) < 0)
-                    {
-                        // プロキシ等が stream:true を無視して通常の JSON を返した場合
-                        string bodyText = sr.ReadToEnd();
-                        ParseNonStreamJson(bodyText, content, acc, cfg, contentCb, reasoningCb);
-                    }
-                    else
-                    {
-                        bool sawDone = false;   // [DONE] を受け取ったか(正常終了の目印)
-                        int lineNo = 0;
-                        string line;
-                        while ((line = sr.ReadLine()) != null)
+                        if (ctype.IndexOf("event-stream", StringComparison.OrdinalIgnoreCase) < 0)
                         {
-                            lineNo++;
-                            if (DebugOn && lineNo <= 5)
-                                Dbg("SSE[" + lineNo + "]: "
-                                    + (line.Length > 160 ? line.Substring(0, 160) + "..." : line));
-                            if (line.Length == 0) continue;
-                            if (!line.StartsWith("data:")) continue;
-                            string data = line.Substring(5).Trim();
-                            if (data == "[DONE]") { sawDone = true; break; }
-
-                            object parsed;
-                            try { parsed = Json.Parse(data); }
-                            catch { continue; }
-
-                            Dictionary<string, object> root = parsed as Dictionary<string, object>;
-                            if (root == null || !root.ContainsKey("choices") ||
-                                !(root["choices"] is List<object>)) continue;
-                            List<object> choices = (List<object>)root["choices"];
-                            if (choices.Count == 0) continue;
-                            Dictionary<string, object> ch = choices[0] as Dictionary<string, object>;
-                            if (ch == null || !ch.ContainsKey("delta")) continue;
-                            Dictionary<string, object> delta = ch["delta"] as Dictionary<string, object>;
-                            if (delta == null) continue;
-
-                            if (delta.ContainsKey("content") && delta["content"] != null)
+                            // プロキシ等が stream:true を無視して通常の JSON を返した場合
+                            string bodyText = sr.ReadToEnd();
+                            ParseNonStreamJson(bodyText, content, acc, cfg, contentCb, reasoningCb);
+                        }
+                        else
+                        {
+                            bool sawDone = false;   // [DONE] を受け取ったか(正常終了の目印)
+                            int lineNo = 0;
+                            string line;
+                            while ((line = sr.ReadLine()) != null)
                             {
-                                string t = Json.AsString(delta["content"]);
-                                if (t.Length > 0)
+                                lineNo++;
+                                if (DebugOn && lineNo <= 5)
+                                    Dbg("SSE[" + lineNo + "]: "
+                                        + (line.Length > 160 ? line.Substring(0, 160) + "..." : line));
+                                if (line.Length == 0) continue;
+                                if (!line.StartsWith("data:")) continue;
+                                string data = line.Substring(5).Trim();
+                                if (data == "[DONE]") { sawDone = true; break; }
+
+                                object parsed;
+                                try { parsed = Json.Parse(data); }
+                                catch { continue; }
+
+                                Dictionary<string, object> root = parsed as Dictionary<string, object>;
+                                if (root == null || !root.ContainsKey("choices") ||
+                                    !(root["choices"] is List<object>)) continue;
+                                List<object> choices = (List<object>)root["choices"];
+                                if (choices.Count == 0) continue;
+                                Dictionary<string, object> ch = choices[0] as Dictionary<string, object>;
+                                if (ch == null || !ch.ContainsKey("delta")) continue;
+                                Dictionary<string, object> delta = ch["delta"] as Dictionary<string, object>;
+                                if (delta == null) continue;
+
+                                if (delta.ContainsKey("content") && delta["content"] != null)
                                 {
-                                    content.Append(t);
-                                    if (contentCb != null) contentCb(t);
-                                }
-                            }
-                            if (cfg.EmitReasoning)
-                            {
-                                string rt = DeltaText(delta, "reasoning_content");
-                                if (rt.Length == 0) rt = DeltaText(delta, "reasoning");
-                                if (rt.Length > 0 && reasoningCb != null) reasoningCb(rt);
-                            }
-                            if (delta.ContainsKey("function_call") && delta["function_call"] is Dictionary<string, object>)
-                            {
-                                Dictionary<string, object> fc = (Dictionary<string, object>)delta["function_call"];
-                                StreamAcc cur;
-                                if (!acc.ContainsKey(0)) { cur = new StreamAcc(); acc[0] = cur; }
-                                else cur = acc[0];
-                                if (fc.ContainsKey("name") && fc["name"] != null) cur.Name += Json.AsString(fc["name"]);
-                                if (fc.ContainsKey("arguments") && fc["arguments"] != null) cur.Args.Append(Json.AsString(fc["arguments"]));
-                            }
-                            if (delta.ContainsKey("tool_calls") && delta["tool_calls"] is List<object>)
-                            {
-                                foreach (object tco in (List<object>)delta["tool_calls"])
-                                {
-                                    Dictionary<string, object> tc = tco as Dictionary<string, object>;
-                                    if (tc == null) continue;
-                                    int idx = tc.ContainsKey("index") ? Json.AsInt(tc["index"]) : acc.Count;
-                                    StreamAcc cur;
-                                    if (!acc.ContainsKey(idx)) { cur = new StreamAcc(); acc[idx] = cur; }
-                                    else cur = acc[idx];
-                                    if (tc.ContainsKey("id") && tc["id"] != null) cur.Id = Json.AsString(tc["id"]);
-                                    Dictionary<string, object> fn =
-                                        (tc.ContainsKey("function")) ? tc["function"] as Dictionary<string, object> : null;
-                                    if (fn != null)
+                                    string t = Json.AsString(delta["content"]);
+                                    if (t.Length > 0)
                                     {
-                                        if (fn.ContainsKey("name") && fn["name"] != null) cur.Name += Json.AsString(fn["name"]);
-                                        if (fn.ContainsKey("arguments") && fn["arguments"] != null) cur.Args.Append(Json.AsString(fn["arguments"]));
+                                        content.Append(t);
+                                        if (contentCb != null) contentCb(t);
+                                    }
+                                }
+                                if (cfg.EmitReasoning)
+                                {
+                                    string rt = DeltaText(delta, "reasoning_content");
+                                    if (rt.Length == 0) rt = DeltaText(delta, "reasoning");
+                                    if (rt.Length > 0 && reasoningCb != null) reasoningCb(rt);
+                                }
+                                if (delta.ContainsKey("function_call") && delta["function_call"] is Dictionary<string, object>)
+                                {
+                                    Dictionary<string, object> fc = (Dictionary<string, object>)delta["function_call"];
+                                    StreamAcc cur;
+                                    if (!acc.ContainsKey(0)) { cur = new StreamAcc(); acc[0] = cur; }
+                                    else cur = acc[0];
+                                    if (fc.ContainsKey("name") && fc["name"] != null) cur.Name += Json.AsString(fc["name"]);
+                                    if (fc.ContainsKey("arguments") && fc["arguments"] != null) cur.Args.Append(Json.AsString(fc["arguments"]));
+                                }
+                                if (delta.ContainsKey("tool_calls") && delta["tool_calls"] is List<object>)
+                                {
+                                    foreach (object tco in (List<object>)delta["tool_calls"])
+                                    {
+                                        Dictionary<string, object> tc = tco as Dictionary<string, object>;
+                                        if (tc == null) continue;
+                                        int idx = tc.ContainsKey("index") ? Json.AsInt(tc["index"]) : acc.Count;
+                                        StreamAcc cur;
+                                        if (!acc.ContainsKey(idx)) { cur = new StreamAcc(); acc[idx] = cur; }
+                                        else cur = acc[idx];
+                                        if (tc.ContainsKey("id") && tc["id"] != null) cur.Id = Json.AsString(tc["id"]);
+                                        Dictionary<string, object> fn =
+                                            (tc.ContainsKey("function")) ? tc["function"] as Dictionary<string, object> : null;
+                                        if (fn != null)
+                                        {
+                                            if (fn.ContainsKey("name") && fn["name"] != null) cur.Name += Json.AsString(fn["name"]);
+                                            if (fn.ContainsKey("arguments") && fn["arguments"] != null) cur.Args.Append(Json.AsString(fn["arguments"]));
+                                        }
                                     }
                                 }
                             }
-                        }
 
-                        Dbg("SSE read finished: lines=" + lineNo + " sawDone=" + sawDone
-                            + " contentLen=" + content.Length);
+                            Dbg("SSE read finished: lines=" + lineNo + " sawDone=" + sawDone
+                                + " contentLen=" + content.Length);
 
-                        // [DONE] を受け取らずにストリームが終わった場合は、
-                        // 応答が途中で切れている(通信断・サーバ側のタイムアウト等)。
-                        // 黙って途中までの本文を確定させない。
-                        if (!sawDone && content.Length > 0)
-                        {
-                            throw new Exception("LLM API (stream) error: the response was cut off"
-                                + " (" + content.Length + " characters received)."
-                                + " Please try again.");
+                            // [DONE] を受け取らずにストリームが終わった場合は、
+                            // 応答が途中で切れている(通信断・サーバ側のタイムアウト等)。
+                            // 黙って途中までの本文を確定させない。
+                            if (!sawDone && content.Length > 0)
+                            {
+                                throw new Exception("LLM API (stream) error: the response was cut off"
+                                    + " (" + content.Length + " characters received)."
+                                    + " Please try again.");
+                            }
                         }
-                    }
                     }
                 }
             }

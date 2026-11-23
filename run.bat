@@ -4,16 +4,16 @@ rem  run.bat - tau.exe を起動します。未ビルドなら build.bat を実行します。
 rem ---------------------------------------------------------------------------
 cd /d "%~dp0"
 
-rem ソースが新しい場合もビルドし直す(古い tau.exe を使わないように)
+rem ソースやプロジェクトが tau.exe より新しければビルドし直す
 set "NEED_BUILD="
 if not exist "tau.exe" (
     set "NEED_BUILD=1"
 ) else (
-    for /f %%A in ('dir /b /o-d "src\*.cs" "tau.exe" 2^>nul') do (
+    for /f %%A in ('dir /b /o-d "src\*.cs" "tau-cli.csproj" "tau.exe" 2^>nul') do (
         if not defined FIRST (
             set "FIRST=%%A"
         ) else (
-            echo %%~xA| findstr /i ".cs" >nul && set "NEED_BUILD=1"
+            echo %%~xA| findstr /i ".cs .csproj" >nul && set "NEED_BUILD=1"
         )
     )
 )

@@ -39,4 +39,11 @@
     <Compile Include="src/**/*.cs" />
   </ItemGroup>
 
+  <!-- テストから内部クラス(Json など)を参照できるようにする -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>tau-tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
 </Project>

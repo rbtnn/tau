@@ -1,0 +1,207 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 'true'
+
+jobs:
+  # ---------------------------------------------------------------------
+  #  テスト: tau-cli (コンソール版) の単体テストを Linux / Windows で回す
+  # ---------------------------------------------------------------------
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore tests/tests.csproj
+
+      - name: Check formatting
+        run: dotnet format tau-cli.csproj --verify-no-changes --verbosity diagnostic
+
+      - name: Test
+        run: dotnet test tests/tests.csproj -c Release --no-restore
+             --logger "trx;LogFileName=results.trx"
+             --results-directory TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: TestResults/*.trx
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------
+  #  自己診断: ビルドした tau で --test=offline を実行する
+  # ---------------------------------------------------------------------
+  selftest:
+    name: selftest (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Build
+        run: dotnet build tau-cli.csproj -c Release -o dist
+
+      - name: Self test (offline)
+        shell: bash
+        run: |
+          export TAU_TEST_NO_INPUT=1
+          export TAU_AMBIGUOUS_WIDTH=1
+          # 一時的な設定で API 呼び出しをスキップさせる
+          tmp="${RUNNER_TEMP:-/tmp}/tau-selftest"
+          rm -rf "$tmp"; mkdir -p "$tmp"
+          export HOME="$tmp"
+          export XDG_CONFIG_HOME="$tmp/.config"
+          export APPDATA="$tmp"
+          if [ -f dist/tau.exe ]; then
+            ./dist/tau.exe --test=offline
+          else
+            dotnet dist/tau.dll --test=offline
+          fi
+
+  # ---------------------------------------------------------------------
+  #  リリース: タグ push 時に各プラットフォーム向け単一ファイルを publish する
+  # ---------------------------------------------------------------------
+  build:
+    name: build (${{ matrix.rid }})
+    needs: [test]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            ext: .exe
+          - rid: win-arm64
+            ext: .exe
+          - rid: linux-x64
+            ext: ''
+          - rid: linux-arm64
+            ext: ''
+          - rid: osx-x64
+            ext: ''
+          - rid: osx-arm64
+            ext: ''
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Publish tau-cli
+        run: >
+          dotnet publish tau-cli.csproj
+          -c Release
+          -r ${{ matrix.rid }}
+          --self-contained
+          -p:PublishSingleFile=true
+          -o publish/${{ matrix.rid }}
+
+      - name: Package
+        shell: bash
+        run: |
+          cd "publish/${{ matrix.rid }}"
+          rm -f ./*.pdb
+          if [ "${{ matrix.rid }}" = "win-x64" ] || [ "${{ matrix.rid }}" = "win-arm64" ]; then
+            zip -q "../../tau-${{ matrix.rid }}.zip" tau.exe
+          else
+            tar czf "../../tau-${{ matrix.rid }}.tar.gz" tau
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tau-${{ matrix.rid }}
+          path: |
+            tau-${{ matrix.rid }}.zip
+            tau-${{ matrix.rid }}.tar.gz
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------
+  #  tau-web (Web UI 版) も壊れていないか確認する
+  # ---------------------------------------------------------------------
+  tau-web:
+    name: tau-web consistency
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Consistency check
+        run: python3 check_consistency.py
+        working-directory: tau-web
+
+  # ---------------------------------------------------------------------
+  #  GitHub Release: タグ push 時のみ
+  # ---------------------------------------------------------------------
+  release:
+    name: release
+    needs: [build, selftest, tau-web]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lR artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*.zip
+            artifacts/*.tar.gz
+          generate_release_notes: true
+          fail_on_unmatched_files: true

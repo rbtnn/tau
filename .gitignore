@@ -4,6 +4,8 @@ tau-web.exe
 output/
 bin/
 obj/
+dist/
+TestResults/
 *.pdb
 *.user
 
@@ -25,5 +27,3 @@ agentweb.log
 __pycache__/
 *.pyc
 
-# tau-cli (コンソール版)
-tau-cli/tau.exe

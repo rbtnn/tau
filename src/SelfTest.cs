@@ -838,7 +838,8 @@ namespace Tau
             bool registered = false;
             try
             {
-                ConsoleCancelEventHandler h = (s, e) => {
+                ConsoleCancelEventHandler h = (s, e) =>
+                {
                     e.Cancel = true;
                 };
                 Console.CancelKeyPress += h;

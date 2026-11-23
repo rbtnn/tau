@@ -37,16 +37,34 @@ namespace Tau
             if (name == null) return "";
             switch (name.Trim().ToLowerInvariant())
             {
-                case "shell": case "cmd": case "execute": case "run": case "exec":
-                case "run_command": case "execute_command": case "command":
+                case "shell":
+                case "cmd":
+                case "execute":
+                case "run":
+                case "exec":
+                case "run_command":
+                case "execute_command":
+                case "command":
                     return "shell";
-                case "read_file": case "read": case "cat": case "readfile":
+                case "read_file":
+                case "read":
+                case "cat":
+                case "readfile":
                     return "read_file";
-                case "write_file": case "write": case "writefile":
+                case "write_file":
+                case "write":
+                case "writefile":
                     return "write_file";
-                case "list_dir": case "ls": case "dir": case "list_directory": case "listdir":
+                case "list_dir":
+                case "ls":
+                case "dir":
+                case "list_directory":
+                case "listdir":
                     return "list_dir";
-                case "curl": case "http_request": case "http": case "fetch":
+                case "curl":
+                case "http_request":
+                case "http":
+                case "fetch":
                     return "curl";
                 default:
                     return name;

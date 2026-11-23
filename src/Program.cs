@@ -82,6 +82,9 @@ namespace Tau
 
             Config cfg = new Config(configPath);
 
+            // Shift-JIS などのコードページを使えるようにする(.NET では既定で無効)
+            RegisterCodePages();
+
             // 設定ファイルの inputEncoding に従って、入力を設定し直す。
             SetupConsoleEncoding(cfg);
 
@@ -124,6 +127,21 @@ namespace Tau
         // Windows では入出力のコードページが食い違うと日本語入力が壊れるため、
         // 対話コンソールのときは両方 UTF-8 に揃える。
         // 設定名 → Encoding を解決する。解決できなければ null。
+        // .NET (Core) では Shift-JIS などのコードページが既定で使えない。
+        // 一度だけ CodePagesEncodingProvider を登録する。
+        static bool codePagesRegistered;
+
+        internal static void RegisterCodePages()
+        {
+            if (codePagesRegistered) return;
+            codePagesRegistered = true;
+            try
+            {
+                Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            }
+            catch { }
+        }
+
         public static Encoding ResolveEncoding(string name)
         {
             if (name == null) return null;
@@ -144,6 +162,7 @@ namespace Tau
                 case "cp932":
                 case "932":
                 case "windows-31j":
+                    RegisterCodePages();
                     try { return Encoding.GetEncoding(932); }
                     catch { return null; }
                 default:
@@ -152,6 +171,7 @@ namespace Tau
                         int cp;
                         if (int.TryParse(n, out cp))
                         {
+                            RegisterCodePages();
                             try { return Encoding.GetEncoding(cp); }
                             catch { return null; }
                         }

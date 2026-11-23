@@ -208,7 +208,8 @@ namespace Tau
                 c.EndConnect(ar);
 
                 ssl = new System.Net.Security.SslStream(client.GetStream(), false,
-                    (sender, cert, chain, errors) => {
+                    (sender, cert, chain, errors) =>
+                    {
                         // 証明書の検証は行う(検証失敗はそのまま例外になる)
                         return errors == System.Net.Security.SslPolicyErrors.None;
                     });
