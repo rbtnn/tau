@@ -263,6 +263,25 @@ namespace Tau.Tests
         }
 
         [Fact]
+        public void LegacyDataDirFollowsDataDirOverride()
+        {
+            // TAU_DATA_DIR を切り替えたときに、旧ディレクトリが実ユーザーの
+            // %APPDATA%\\tau を指すと、テストが利用者のデータを壊してしまう。
+            string before = Environment.GetEnvironmentVariable("TAU_DATA_DIR");
+            string dataDir = Path.Combine(_dir, ".config", "tau-cli");
+            Environment.SetEnvironmentVariable("TAU_DATA_DIR", dataDir);
+            try
+            {
+                Assert.Equal(Path.Combine(_dir, ".config", "tau"), Config.LegacyDataDir());
+                Assert.StartsWith(_dir, Config.LegacyDataDir());
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("TAU_DATA_DIR", before);
+            }
+        }
+
+        [Fact]
         public void DefaultConfigPathIsUnderDataDir()
         {
             string p = Config.DefaultConfigPath();

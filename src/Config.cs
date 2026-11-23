@@ -121,8 +121,18 @@ namespace Tau
 
         // 旧バージョンが使っていたデータディレクトリ。
         // ここにデータがあれば、新しい場所へ 1 度だけコピーする。
+        //
+        // TAU_DATA_DIR が設定されている場合は、その親に "tau" を作る。
+        // そうしないと、保存先を一時ディレクトリに切り替えたテストが
+        // 実ユーザーの %APPDATA%\tau を読み書きしてしまう。
         public static string LegacyDataDir()
         {
+            string dir = Environment.GetEnvironmentVariable("TAU_DATA_DIR");
+            if (dir != null && dir.Trim().Length > 0)
+            {
+                string parent = Path.GetDirectoryName(Path.GetFullPath(dir.Trim()));
+                if (!string.IsNullOrEmpty(parent)) return Path.Combine(parent, "tau");
+            }
             return AppDirUnder("tau");
         }
 
