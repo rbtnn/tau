@@ -1,11 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
 using Tau;
 using Xunit;
 
 namespace Tau.Tests
 {
-    // Json は外部ライブラリを使わない自前のパーサ／シリアライザ。
+    // Json は .NET 標準の System.Text.Json を使うパーサ／シリアライザ。
     // 壊れると API 応答の解釈がすべて狂うため、ここで重点的に検証する。
     public class JsonTests
     {
@@ -435,6 +436,192 @@ namespace Tau.Tests
         public void AsIntOnDouble()
         {
             Assert.Equal(3, Json.AsInt(3.9));
+        }
+
+        // ---------------- System.Text.Json 固有の挙動 ----------------
+
+        [Fact]
+        public void BomIsAccepted()
+        {
+            // ファイルから読むと BOM が付くことがある。JsonDocument は
+            // そのままでは読めないので Parse 側で取り除いている。
+            var d = Json.Parse("\uFEFF{\"a\":1}") as Dictionary<string, object>;
+            Assert.NotNull(d);
+            Assert.Equal(1, Json.AsInt(d["a"]));
+        }
+
+        [Fact]
+        public void WhitespaceOnlyIsRejected()
+        {
+            Assert.ThrowsAny<JsonException>(() => Json.Parse("   "));
+            Assert.ThrowsAny<JsonException>(() => Json.Parse("\t\n "));
+        }
+
+        [Fact]
+        public void NullInputIsRejected()
+        {
+            Assert.ThrowsAny<JsonException>(() => Json.Parse(null));
+        }
+
+        [Fact]
+        public void TrailingContentIsRejected()
+        {
+            // 1 つの値の後に別の値が続くのは JSON として不正。
+            Assert.ThrowsAny<JsonException>(() => Json.Parse("{\"a\":1}{\"b\":2}"));
+            Assert.ThrowsAny<JsonException>(() => Json.Parse("1 2"));
+        }
+
+        [Fact]
+        public void SingleQuotesAreRejected()
+        {
+            Assert.ThrowsAny<JsonException>(() => Json.Parse("{'a':1}"));
+        }
+
+        [Fact]
+        public void TrailingCommaIsRejected()
+        {
+            Assert.ThrowsAny<JsonException>(() => Json.Parse("{\"a\":1,}"));
+            Assert.ThrowsAny<JsonException>(() => Json.Parse("[1,]"));
+        }
+
+        [Fact]
+        public void CommentsAreRejected()
+        {
+            Assert.ThrowsAny<JsonException>(() => Json.Parse("{\"a\":1 /* c */}"));
+            Assert.ThrowsAny<JsonException>(() => Json.Parse("// c\n{\"a\":1}"));
+        }
+
+        [Fact]
+        public void JapaneseIsNotEscapedOnWrite()
+        {
+            // 既定のエンコーダだと "あ" が \u3042 になる。
+            // 設定ファイルやセッションが読めなくなるため、そのまま書く。
+            string s = Json.ToString("あいう");
+            Assert.Equal("\"あいう\"", s);
+            Assert.DoesNotContain("\\u", s);
+        }
+
+        [Fact]
+        public void ControlCharactersAreEscapedOnWrite()
+        {
+            string s = Json.ToString("a\u0001b");
+            Assert.Contains("\\u0001", s, StringComparison.OrdinalIgnoreCase);
+            // 往復しても元に戻る
+            Assert.Equal("a\u0001b", Json.AsString(Json.Parse(s)));
+        }
+
+        [Fact]
+        public void NanIsWrittenAsNull()
+        {
+            // JSON に NaN は無い。Utf8JsonWriter は例外を投げるので
+            // null にしてアプリを落とさないようにしている。
+            Assert.Equal("null", Json.ToString(double.NaN));
+            Assert.Equal("null", Json.ToString(double.PositiveInfinity));
+            Assert.Equal("null", Json.ToString(double.NegativeInfinity));
+        }
+
+        [Fact]
+        public void NanInsideObjectDoesNotThrow()
+        {
+            var d = new Dictionary<string, object> { ["v"] = double.NaN };
+            string s = Json.ToString(d);
+            Assert.Equal("{\"v\":null}", s);
+        }
+
+        [Fact]
+        public void DoubleUsesRoundTripFormat()
+        {
+            // 精度が落ちないこと
+            Assert.Equal("0.1", Json.ToString(0.1));
+            Assert.Equal("1.5", Json.ToString(1.5));
+            Assert.Equal(0.1, Json.Parse(Json.ToString(0.1)));
+        }
+
+        [Fact]
+        public void FloatIsWritten()
+        {
+            Assert.Equal("1.5", Json.ToString(1.5f));
+        }
+
+        [Fact]
+        public void DecimalIsWritten()
+        {
+            Assert.Equal("1.5", Json.ToString(1.5m));
+        }
+
+        [Fact]
+        public void AsIntAcceptsDecimalString()
+        {
+            // "1.9" は従来 0 になっていた。int に切り捨てて返す。
+            Assert.Equal(1, Json.AsInt("1.9"));
+            Assert.Equal(0, Json.AsInt("abc"));
+        }
+
+        [Fact]
+        public void AsStringFormatsDoubleInvariantly()
+        {
+            // カルチャで小数点が "," にならないこと
+            Assert.Equal("1.5", Json.AsString(1.5));
+        }
+
+        [Fact]
+        public void LargeIntegersKeepPrecision()
+        {
+            var d = Json.Parse("{\"big\":123456789012345}") as Dictionary<string, object>;
+            Assert.IsType<long>(d["big"]);
+            Assert.Equal(123456789012345L, (long)d["big"]);
+        }
+
+        [Fact]
+        public void IntStaysInt()
+        {
+            var d = Json.Parse("{\"n\":42}") as Dictionary<string, object>;
+            Assert.IsType<int>(d["n"]);
+        }
+
+        [Fact]
+        public void ExponentBecomesDouble()
+        {
+            var d = Json.Parse("{\"e\":1e10}") as Dictionary<string, object>;
+            Assert.Equal(1e10, (double)d["e"]);
+        }
+
+        [Fact]
+        public void UnicodeEscapeDecodesToChar()
+        {
+            Assert.Equal("あ", Json.AsString(Json.Parse("\"\\u3042\"")));
+        }
+
+        [Fact]
+        public void SurrogatePairDecodes()
+        {
+            // 絵文字 (U+1F600) はサロゲートペア
+            string s = Json.AsString(Json.Parse("\"\\uD83D\\uDE00\""));
+            Assert.Equal("\U0001F600", s);
+        }
+
+        [Fact]
+        public void DeeplyNestedRoundTrip()
+        {
+            string json = "{\"a\":{\"b\":{\"c\":{\"d\":[1,[2,[3]]]}}}}";
+            object v = Json.Parse(json);
+            Assert.Equal(json, Json.ToString(v));
+        }
+
+        [Fact]
+        public void EmptyKeyIsPreserved()
+        {
+            var d = Json.Parse("{\"\":1}") as Dictionary<string, object>;
+            Assert.NotNull(d);
+            Assert.Equal(1, Json.AsInt(d[""]));
+        }
+
+        [Fact]
+        public void DuplicateKeysLastWins()
+        {
+            // Dictionary への代入なので後勝ち。挙動を固定しておく。
+            var d = Json.Parse("{\"a\":1,\"a\":2}") as Dictionary<string, object>;
+            Assert.Equal(2, Json.AsInt(d["a"]));
         }
 
         // ---------------- 実データ: OpenAI 形式 ----------------

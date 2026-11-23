@@ -849,13 +849,13 @@ xunit による単体テストです。.NET SDK 10 だけで動きます（`mono
 
 | ファイル | 内容 |
 |---|---|
-| `tests/JsonTests.cs` | JSON のパース・シリアライズ・往復・OpenAI 形式の解釈（80 テスト） |
+| `tests/JsonTests.cs` | JSON のパース・シリアライズ・往復・OpenAI 形式の解釈・厳格性（100 テスト） |
 | `tests/MarkdownTests.cs` | 表示幅（全角・半角・Ambiguous）・記号除去・表の罫線 |
 | `tests/ConfigTests.cs` | 設定の保存・読み込み・未知キーの保持・データ移行 |
 | `tests/SessionStoreTests.cs` | セッションの保存・一覧・削除・`lastSession` |
 
 ```
-Passed!  - Failed: 0, Passed: 162, Skipped: 0, Total: 162
+Passed!  - Failed: 0, Passed: 186, Skipped: 0, Total: 186
 ```
 
 ### `test_tau.py`（実行時回帰テスト）
@@ -911,13 +911,14 @@ python3 test_tau.py
 | 再開 | `--session` で続きから開けるか（LLM を呼ばないか） |
 | コマンド | `/model` `/tools` が効き、設定に保存されるか |
 | エラー | API エラーで落ちずに表示して続行するか |
-| TLS | `SystemDefault`/`Tls13` を使わず `Tls12` 単独か |
+| TLS | `SocketsHttpHandler.SslOptions` に `Tls12 | Tls13` を設定しているか |
 | 診断 | `--diag` が TLS 各バージョンの接続可否を出すか |
 | デバッグ | `--debug` / `TAU_DEBUG` で詳細が出るか |
-| TLS 失敗 | `SecureChannelFailure` / `SslProtocolType` エラーを検出するか |
-| TLS 除外 | 証明書エラー（`TrustFailure`）は再試行しないか |
+| TLS 失敗 | `AuthenticationException` を TLS 失敗として検出するか |
+| TLS 除外 | 証明書エラーは再試行しないか |
 | TLS 再試行 | ストリーミング/非ストリーミングの両方で再試行するか |
 | TLS 適用 | LLM 呼び出しと `curl` の両方で設定しているか |
+| 廃止 API | `ServicePointManager` / `HttpWebRequest` を使っていないか |
 | 再試行 | 一時的な失敗をバックオフ付きで最大3回試すか |
 | 再試行除外 | HTTP エラー・証明書エラーは再試行しないか |
 | HTTP エラー | ステータスコードとレスポンス本文が表示されるか |
@@ -985,36 +986,57 @@ git push origin v1.0.0
 
 ## JSON の扱い
 
-`Json` は**外部ライブラリを使わない自前実装**（`src/Json.cs`・約 280 行）です。
+`Json` は **.NET 標準の `System.Text.Json`** を使います（`src/Json.cs`・約 200 行）。
 
-| 観点 | 判断 |
+| 用途 | 使う API |
 |---|---|
-| 依存 | なし（追加パッケージ不要） |
-| 安全性 | `dotnet test` の `JsonTests`（80 テスト）で検証 |
-| 速度 | 小さな API 応答には十分 |
-| 移植性 | `System.Text.Json` が使えない環境でも動く |
+| 読み込み | `JsonDocument.Parse`（厳格モード） |
+| 書き出し | `Utf8JsonWriter` |
+| 内部表現 | `Dictionary<string, object>` / `List<object>`（従来どおり） |
 
-### `System.Text.Json` へ移行しない理由
+追加パッケージは不要です（`System.Text.Json` は .NET に同梱）。
 
-.NET 10 では `System.Text.Json`（`JsonNode`）が標準で使えますが、**全面移行はしていません**。
+### 内部表現を変えなかった理由
 
-- 内部表現が `Dictionary<string, object>` / `List<object>` で、
-  呼び出し側に **138 箇所の型宣言と 179 箇所の呼び出し**がある。
-  `JsonNode` に変えると全箇所の書き換えが必要で、リグレッションの危険が大きい。
-- 自前実装は既に**テストで固められており**、壊れた入力で例外を投げることも確認済み。
-- 外部依存を増やさない方針（単一ファイル配布・オフラインでもビルド可）と合致する。
+`JsonNode` に置き換えると、`Dictionary<string, object>` を使う
+**138 箇所の型宣言と 179 箇所の呼び出し**をすべて書き換える必要があります。
+一方、`JsonDocument` / `Utf8JsonWriter` は同じ内部表現のまま使えるため、
+**呼び出し側を 1 行も変えずに**標準ライブラリへ移行できました。
 
-### 移行する場合の手順
+`JsonTests`（186 テスト中 100 テスト）は移行前に書いたものを**そのまま**通しており、
+互換性が保たれていることを確認済みです。
 
-将来 `System.Text.Json` に寄せる場合は、次の順で進めると安全です。
+### 厳格モードにしている理由
 
-1. `Json` の公開 API（`Parse` / `ToString` / `AsString` / `AsInt`）を
-   `JsonNode` ベースの実装に差し替える（呼び出し側はそのまま）
-2. `JsonTests` をそのまま流して互換性を確認する
-3. 差分が出た箇所だけ個別に直す
+`JsonDocument.Parse` の既定値は緩く、**コメント・末尾カンマ・単一引用符**を
+受け付けてしまいます。壊れた API 応答がそのまま通ると後段で意味不明な
+エラーになるため、RFC 8259 どおりに拒否します。
 
-`JsonTests` が仕様の基準になっているため、実装を差し替えても
-**同じテストが通れば互換性が保たれている**ことが確認できます。
+```csharp
+new JsonDocumentOptions {
+    CommentHandling = JsonCommentHandling.Disallow,
+    AllowTrailingCommas = false,
+    MaxDepth = 256,
+}
+```
+
+### 日本語をエスケープしない理由
+
+既定のエンコーダは `あ` を `\u3042` に変換します。それだと設定ファイルや
+セッションが読めなくなるため、`UnsafeRelaxedJsonEscaping` を使います。
+
+出力先は LLM へのリクエストとローカルの設定/セッションだけで、
+HTML へ埋め込むことはないので安全です。
+
+### 挙動の変化（意図的なもの）
+
+| 入力 | 旧 | 新 |
+|---|---|---|
+| `NaN` / `Infinity` | `NaN`（不正な JSON） | `null`（例外で落とさない） |
+| `{"a":}` | 例外 | 例外（同じ） |
+| コメント・末尾カンマ | 一部受理 | すべて拒否 |
+| `Json.AsInt("1.9")` | `0` | `1` |
+| BOM 付き | 受理 | 受理（取り除いてから解析） |
 
 ## ファイル構成
 
@@ -1023,7 +1045,7 @@ tau-cli/  (= リポジトリ直下)
   src/              ソース（クラスごとに 1 ファイル）
     Program.cs              エントリポイント・CLI 引数・コンソール設定
     Config.cs               設定（tau.json）と環境変数
-    Json.cs                 JSON の解析・生成
+    Json.cs                 JSON の解析・生成（System.Text.Json 経由）
     SessionStore.cs         セッションの保存・読み込み・削除
     ProxyHelper.cs          プロキシ設定
     LlmResp.cs              LLM 応答の入れ物
