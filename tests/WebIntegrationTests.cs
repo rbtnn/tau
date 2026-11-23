@@ -39,30 +39,28 @@ namespace Tau.Tests
             return port;
         }
 
-        /// <summary>tau --web を起動して、応答するまで待つ。</summary>
-        (Process proc, string baseUrl) StartWeb(int port)
+        /// <summary>
+        /// tau --web を起動して、応答するまで待つ。
+        ///
+        /// リダイレクトした出力を読まないと、Windows ではパイプが詰まって
+        /// サーバが応答しなくなる。StartBackground は出力を読み捨てる。
+        /// </summary>
+        (BackgroundTau proc, string baseUrl) StartWeb(int port)
         {
-            ProcessStartInfo psi = new()
+            Dictionary<string, string> env = new()
             {
-                FileName = "dotnet",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                WorkingDirectory = runner.WorkDir,
+                ["HOME"] = runner.WorkDir,
+                ["XDG_CONFIG_HOME"] = Path.Combine(runner.WorkDir, ".config"),
             };
-            psi.ArgumentList.Add(TauRunner.TauDll());
-            psi.ArgumentList.Add("--web");
-            psi.ArgumentList.Add("--port");
-            psi.ArgumentList.Add(port.ToString());
-            psi.ArgumentList.Add("--config");
-            psi.ArgumentList.Add(runner.ConfigPath);
 
-            psi.Environment["HOME"] = runner.WorkDir;
-            psi.Environment["XDG_CONFIG_HOME"] = Path.Combine(runner.WorkDir, ".config");
-
-            Process p = Process.Start(psi);
-            p.BeginOutputReadLine();
-            p.BeginErrorReadLine();
+            BackgroundTau p = runner.StartBackground(new[]
+            {
+                "--web",
+                "--port",
+                port.ToString(),
+                "--config",
+                runner.ConfigPath,
+            }, env);
 
             string baseUrl = "http://127.0.0.1:" + port;
             using HttpClient client = new() { Timeout = TimeSpan.FromSeconds(2) };
@@ -74,20 +72,18 @@ namespace Tau.Tests
                     if (r.IsSuccessStatusCode) return (p, baseUrl);
                 }
                 catch { }
+                if (p.Process.HasExited) break;
                 Thread.Sleep(200);
             }
-            try { p.Kill(true); } catch { }
-            throw new Exception("the web server did not start on " + baseUrl);
+            string log = p.Log.ToString();
+            p.Dispose();
+            throw new Exception("the web server did not start on " + baseUrl
+                + (log.Length > 0 ? "\n--- tau output ---\n" + log : ""));
         }
 
-        static void StopWeb(Process p)
+        static void StopWeb(BackgroundTau p)
         {
-            try
-            {
-                if (!p.HasExited) p.Kill(true);
-                p.WaitForExit(5000);
-            }
-            catch { }
+            p.Dispose();
         }
 
         // ---------------- 画面と API ----------------
@@ -98,7 +94,7 @@ namespace Tau.Tests
             llm.Reply = MockLlm.Text("ok");
             runner.WriteConfig(llm.Url);
             int port = FreePort();
-            (Process p, string url) = StartWeb(port);
+            (BackgroundTau p, string url) = StartWeb(port);
             try
             {
                 using HttpClient c = new();
@@ -119,7 +115,7 @@ namespace Tau.Tests
             llm.Reply = MockLlm.Text("ok");
             runner.WriteConfig(llm.Url);
             int port = FreePort();
-            (Process p, string url) = StartWeb(port);
+            (BackgroundTau p, string url) = StartWeb(port);
             try
             {
                 using HttpClient c = new();
@@ -137,7 +133,7 @@ namespace Tau.Tests
             llm.Reply = MockLlm.Text("ok");
             runner.WriteConfig(llm.Url);
             int port = FreePort();
-            (Process p, string url) = StartWeb(port);
+            (BackgroundTau p, string url) = StartWeb(port);
             try
             {
                 using HttpClient c = new();
@@ -155,7 +151,7 @@ namespace Tau.Tests
             llm.Reply = MockLlm.ThinkThenText("考えた", "こんにちは");
             runner.WriteConfig(llm.Url, emitReasoning: true);
             int port = FreePort();
-            (Process p, string url) = StartWeb(port);
+            (BackgroundTau p, string url) = StartWeb(port);
             try
             {
                 using HttpClient c = new();
@@ -185,7 +181,7 @@ namespace Tau.Tests
             llm.Reply = MockLlm.Text("Web応答");
             runner.WriteConfig(llm.Url);
             int port = FreePort();
-            (Process p, string url) = StartWeb(port);
+            (BackgroundTau p, string url) = StartWeb(port);
             try
             {
                 using HttpClient c = new();
@@ -242,7 +238,7 @@ namespace Tau.Tests
             llm.Reply = MockLlm.Text("ok");
             runner.WriteConfig(llm.Url);
             int port = FreePort();
-            (Process p, string url) = StartWeb(port);
+            (BackgroundTau p, string url) = StartWeb(port);
             try
             {
                 using HttpClient c = new();
@@ -263,7 +259,7 @@ namespace Tau.Tests
             llm.Reply = MockLlm.Text("ok");
             runner.WriteConfig(llm.Url);
             int port = FreePort();
-            (Process p, string url) = StartWeb(port);
+            (BackgroundTau p, string url) = StartWeb(port);
             try
             {
                 using HttpClient c = new();
@@ -279,7 +275,7 @@ namespace Tau.Tests
             llm.Reply = MockLlm.Text("ok");
             runner.WriteConfig(llm.Url);
             int port = FreePort();
-            (Process p, string url) = StartWeb(port);
+            (BackgroundTau p, string url) = StartWeb(port);
             try
             {
                 using HttpClient c = new();
@@ -305,7 +301,7 @@ namespace Tau.Tests
             llm.Reply = MockLlm.Text("ok");
             runner.WriteConfig(llm.Url);
             int port = FreePort();
-            (Process p, string url) = StartWeb(port);
+            (BackgroundTau p, string url) = StartWeb(port);
             try
             {
                 using HttpClient c = new();
@@ -326,7 +322,7 @@ namespace Tau.Tests
             llm.Reply = MockLlm.Text("ok");
             runner.WriteConfig(llm.Url);
             int port = FreePort();
-            (Process p, string url) = StartWeb(port);
+            (BackgroundTau p, string url) = StartWeb(port);
             try
             {
                 using HttpClient c = new();

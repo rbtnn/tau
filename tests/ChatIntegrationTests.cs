@@ -103,16 +103,16 @@ namespace Tau.Tests
 
             Assert.Equal(2, llm.Requests.Count);
             var messages = Assert.IsType<List<object>>(llm.Requests[1]["messages"]);
-            var tool = Assert.Single(messages.OfType<Dictionary<string, object>>()
-                .Where(m => Json.AsString(m["role"]) == "tool"));
+            var tool = Assert.Single(messages.OfType<Dictionary<string, object>>(),
+                m => Json.AsString(m["role"]) == "tool");
             Assert.Equal("original-call-id", tool["tool_call_id"]);
             Assert.Equal(name, tool["name"]);
             var result = Assert.IsType<Dictionary<string, object>>(Json.Parse(Json.AsString(tool["content"])));
             Assert.False(result.ContainsKey("error"), Json.ToString(result));
             Assert.Equal("true", Json.AsString(result["ok"]));
 
-            var assistant = Assert.Single(messages.OfType<Dictionary<string, object>>()
-                .Where(m => m.ContainsKey("tool_calls")));
+            var assistant = Assert.Single(messages.OfType<Dictionary<string, object>>(),
+                m => m.ContainsKey("tool_calls"));
             var call = Assert.IsType<Dictionary<string, object>>(
                 Assert.Single(Assert.IsType<List<object>>(assistant["tool_calls"])));
             Assert.Equal("original-call-id", call["id"]);

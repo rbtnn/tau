@@ -155,32 +155,7 @@ namespace Tau.Tests
         public string Run(string stdin, string[] args = null, int timeoutSec = 60,
                           Dictionary<string, string> extraEnv = null)
         {
-            List<string> cmd = new() { "dotnet", TauDll() };
-            if (args != null) cmd.AddRange(args);
-
-            ProcessStartInfo psi = new()
-            {
-                FileName = cmd[0],
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                WorkingDirectory = WorkDir,
-                StandardOutputEncoding = Encoding.UTF8,
-                StandardErrorEncoding = Encoding.UTF8,
-            };
-            for (int i = 1; i < cmd.Count; i++) psi.ArgumentList.Add(cmd[i]);
-
-            foreach (KeyValuePair<string, string> kv in savedEnv)
-            {
-                string v = Environment.GetEnvironmentVariable(kv.Key);
-                if (v != null) psi.Environment[kv.Key] = v;
-            }
-            if (extraEnv != null)
-                foreach (KeyValuePair<string, string> kv in extraEnv)
-                    psi.Environment[kv.Key] = kv.Value;
-
-            using Process p = Process.Start(psi);
+            using Process p = Start(args, extraEnv);
             try
             {
                 if (stdin != null)
@@ -209,6 +184,55 @@ namespace Tau.Tests
                 try { if (!p.HasExited) p.Kill(true); } catch { }
                 throw;
             }
+        }
+
+        /// <summary>
+        /// tau を起動し、出力を読み捨てながら動かし続ける。
+        ///
+        /// リダイレクトした出力を誰も読まないと、Windows ではパイプが詰まって
+        /// プロセスが書き込みで止まる。--web のように動き続けるプロセスは
+        /// これを使って起動する。
+        /// </summary>
+        public BackgroundTau StartBackground(string[] args = null,
+                                            Dictionary<string, string> extraEnv = null)
+        {
+            Process p = Start(args, extraEnv);
+            BackgroundTau bg = new(p);
+            p.OutputDataReceived += (s, e) => { if (e.Data != null) bg.Log.AppendLine(e.Data); };
+            p.ErrorDataReceived += (s, e) => { if (e.Data != null) bg.Log.AppendLine(e.Data); };
+            p.BeginOutputReadLine();
+            p.BeginErrorReadLine();
+            return bg;
+        }
+
+        Process Start(string[] args, Dictionary<string, string> extraEnv)
+        {
+            List<string> cmd = new() { "dotnet", TauDll() };
+            if (args != null) cmd.AddRange(args);
+
+            ProcessStartInfo psi = new()
+            {
+                FileName = cmd[0],
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                WorkingDirectory = WorkDir,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
+            };
+            for (int i = 1; i < cmd.Count; i++) psi.ArgumentList.Add(cmd[i]);
+
+            foreach (KeyValuePair<string, string> kv in savedEnv)
+            {
+                string v = Environment.GetEnvironmentVariable(kv.Key);
+                if (v != null) psi.Environment[kv.Key] = v;
+            }
+            if (extraEnv != null)
+                foreach (KeyValuePair<string, string> kv in extraEnv)
+                    psi.Environment[kv.Key] = kv.Value;
+
+            return Process.Start(psi);
         }
 
         /// <summary>セッションのファイル一覧(新しい順)。</summary>
@@ -257,6 +281,34 @@ namespace Tau.Tests
             foreach (KeyValuePair<string, string> kv in savedEnv)
                 Environment.SetEnvironmentVariable(kv.Key, kv.Value);
             try { Directory.Delete(WorkDir, true); } catch { }
+        }
+    }
+
+    /// <summary>StartBackground で起動した tau のプロセス。</summary>
+    public sealed class BackgroundTau : IDisposable
+    {
+        public Process Process { get; }
+        public StringBuilder Log { get; } = new();
+
+        internal BackgroundTau(Process process)
+        {
+            Process = process;
+        }
+
+        public void Stop()
+        {
+            try
+            {
+                if (!Process.HasExited) Process.Kill(true);
+                Process.WaitForExit(5000);
+            }
+            catch { }
+        }
+
+        public void Dispose()
+        {
+            Stop();
+            try { Process.Dispose(); } catch { }
         }
     }
 }
