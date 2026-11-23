@@ -22,6 +22,10 @@ namespace Tau
     {
         const int MAX_TURNS = 10;   // 1 ターンのツール反復上限
 
+        // ツール反復が上限に達したとき、コンテキストを整理して続行する回数。
+        // 上限に達したら即エラーにすると、長い作業が途中で切れてしまう。
+        const int MAX_COMPACT_ROUNDS = 2;
+
         readonly Config cfg;
 
         public Agent(Config cfg)
@@ -266,6 +270,49 @@ namespace Tau
             ctx.LastTotalTokens = 0;
         }
 
+        // しきい値に関係なく、必ずコンテキストを整理する。
+        // ツール反復が上限に達したときに使う。古い部分を要約して
+        // ContextStart を進め、直近の KeepRecentTokens だけを残す。
+        void ForceCompact(Config cfg, SessionCtx ctx)
+        {
+            if (ctx.ContextStart >= ctx.Messages.Count) return;
+
+            long kept = 0;
+            int cut = ctx.Messages.Count;
+            for (int i = ctx.Messages.Count - 1; i >= 0; i--)
+            {
+                long t = TokensOf(ctx.Messages[i]);
+                if (kept + t > cfg.KeepRecentTokens) { cut = i; break; }
+                kept += t;
+                cut = i;
+            }
+            while (cut < ctx.Messages.Count && !IsValidCutStart(ctx.Messages[cut])) cut++;
+
+            // ツール呼び出しが続くと、適切な切断点が末尾まで進んでしまい
+            // 何も要約できない。その場合は直近の 2 組だけを残し、
+            // それより前をまとめて要約する。
+            if (cut >= ctx.Messages.Count)
+            {
+                // ツール呼び出しが続くと適切な切断点が無い。
+                // その場合は「後ろから N 件を残す」という方針に切り替え、
+                // 残す範囲の先頭で切る。要約対象が空にならないことを優先する。
+                const int keepTail = 4;   // 直近のメッセージ数
+                cut = ctx.Messages.Count - keepTail;
+                if (cut <= ctx.ContextStart) cut = ctx.ContextStart + 1;
+
+                // それでも末尾に達するなら、先頭 1 件だけを要約する
+                if (cut >= ctx.Messages.Count) cut = ctx.ContextStart + 1;
+            }
+
+            if (cut <= ctx.ContextStart) return;
+            if (cut >= ctx.Messages.Count) return;
+
+            List<object> span = ctx.Messages.GetRange(ctx.ContextStart, cut - ctx.ContextStart);
+            ctx.Summary = Summarize(cfg, ctx.Summary, span);
+            ctx.ContextStart = cut;
+            ctx.LastTotalTokens = 0;
+        }
+
         // ---------------- エージェント実行 ----------------
 
         // 戻り値: 最終回答。emit 系のコールバックでストリーミング表示する。
@@ -285,78 +332,100 @@ namespace Tau
 
             try
             {
-                for (int turn = 0; turn < MAX_TURNS; turn++)
+                // ツール反復が上限に達したら、コンテキストを整理して
+                // 続きを実行させる。整理は MAX_COMPACT_ROUNDS 回まで。
+                for (int compacted = 0; compacted <= MAX_COMPACT_ROUNDS; compacted++)
                 {
-                    if (cancelled != null && cancelled())
+                    for (int turn = 0; turn < MAX_TURNS; turn++)
                     {
-                        ctx.Messages.Add(Msg("assistant", "⚠ Cancelled.", turnSteps, ThinkOf(turnThink)));
-                        return "⚠ Cancelled.";
-                    }
-
-                    List<object> eff = BuildEffectiveMessages(cfg, ctx);
-                    LlmResp resp;
-                    try
-                    {
-                        resp = LlmClient.CallStream(cfg, eff, cfg.AllowTools,
-                            (d) => { if (onContent != null) onContent(d); },
-                            (d) => { turnThink.Append(d); if (onReasoning != null) onReasoning(d); });
-                    }
-                    catch (LlmCancelledException)
-                    {
-                        ctx.Messages.Add(Msg("assistant", "⚠ Cancelled.", turnSteps, ThinkOf(turnThink)));
-                        return "⚠ Cancelled.";
-                    }
-                    if (resp.TotalTokens > 0) ctx.LastTotalTokens = resp.TotalTokens;
-
-                    if (resp.ToolCalls != null && resp.ToolCalls.Count > 0)
-                    {
-                        ctx.Messages.Add(AsstWithToolCalls(resp));
-                        int n = Math.Min(resp.ToolCalls.Count, cfg.MaxToolsPerTurn);
-
-                        for (int k = 0; k < n; k++)
+                        if (cancelled != null && cancelled())
                         {
-                            if (cancelled != null && cancelled()) break;
-
-                            Dictionary<string, object> call = resp.ToolCalls[k] as Dictionary<string, object>;
-                            if (call == null) continue;
-
-                            string id = Json.AsString(Get(call, "id"));
-                            if (id.Length == 0) id = "call_" + k;
-                            call["id"] = id;
-
-                            Dictionary<string, object> fn = Get(call, "function");
-                            string name = "";
-                            string argsJson = "{}";
-                            if (fn != null)
-                            {
-                                name = Json.AsString(Get(fn, "name"));
-                                object argsVal = fn.ContainsKey("arguments") ? fn["arguments"] : null;
-                                if (argsVal is string) argsJson = (string)argsVal;
-                                else if (argsVal != null) argsJson = Json.ToString(argsVal);
-                            }
-                            if (name == null || name.Trim().Length == 0) name = ToolExecutor.InferName(fn, argsJson);
-                            if (fn != null && name != null && name.Trim().Length > 0) fn["name"] = name;
-
-                            string detail = ToolDetail(name, argsJson);
-                            string step = "Tool: " + (name.Length > 0 ? name : "?")
-                                + (detail.Length > 0 ? ("  " + detail) : "");
-                            turnSteps.Add(step);
-                            if (onTool != null) onTool(name, detail);
-
-                            string result;
-                            try { result = ToolExecutor.Execute(name, argsJson, cfg); }
-                            catch (Exception ex) { result = "{\"error\": \"" + Escape(ex.Message) + "\"}"; }
-
-                            ctx.Messages.Add(ToolMsg(id, name, result));
+                            ctx.Messages.Add(Msg("assistant", "⚠ Cancelled.", turnSteps, ThinkOf(turnThink)));
+                            return "⚠ Cancelled.";
                         }
-                        if (save != null) save(ctx);
-                        continue;
+
+                        List<object> eff = BuildEffectiveMessages(cfg, ctx);
+                        LlmResp resp;
+                        try
+                        {
+                            resp = LlmClient.CallStream(cfg, eff, cfg.AllowTools,
+                                (d) => { if (onContent != null) onContent(d); },
+                                (d) => { turnThink.Append(d); if (onReasoning != null) onReasoning(d); });
+                        }
+                        catch (LlmCancelledException)
+                        {
+                            ctx.Messages.Add(Msg("assistant", "⚠ Cancelled.", turnSteps, ThinkOf(turnThink)));
+                            return "⚠ Cancelled.";
+                        }
+                        if (resp.TotalTokens > 0) ctx.LastTotalTokens = resp.TotalTokens;
+
+                        if (resp.ToolCalls != null && resp.ToolCalls.Count > 0)
+                        {
+                            ctx.Messages.Add(AsstWithToolCalls(resp));
+                            int n = Math.Min(resp.ToolCalls.Count, cfg.MaxToolsPerTurn);
+
+                            for (int k = 0; k < n; k++)
+                            {
+                                if (cancelled != null && cancelled()) break;
+
+                                Dictionary<string, object> call = resp.ToolCalls[k] as Dictionary<string, object>;
+                                if (call == null) continue;
+
+                                string id = Json.AsString(Get(call, "id"));
+                                if (id.Length == 0) id = "call_" + k;
+                                call["id"] = id;
+
+                                Dictionary<string, object> fn = Get(call, "function");
+                                string name = "";
+                                string argsJson = "{}";
+                                if (fn != null)
+                                {
+                                    name = Json.AsString(Get(fn, "name"));
+                                    object argsVal = fn.ContainsKey("arguments") ? fn["arguments"] : null;
+                                    if (argsVal is string) argsJson = (string)argsVal;
+                                    else if (argsVal != null) argsJson = Json.ToString(argsVal);
+                                }
+                                if (name == null || name.Trim().Length == 0) name = ToolExecutor.InferName(fn, argsJson);
+                                if (fn != null && name != null && name.Trim().Length > 0) fn["name"] = name;
+
+                                string detail = ToolDetail(name, argsJson);
+                                string step = "Tool: " + (name.Length > 0 ? name : "?")
+                                    + (detail.Length > 0 ? ("  " + detail) : "");
+                                turnSteps.Add(step);
+                                if (onTool != null) onTool(name, detail);
+
+                                string result;
+                                try { result = ToolExecutor.Execute(name, argsJson, cfg); }
+                                catch (Exception ex) { result = "{\"error\": \"" + Escape(ex.Message) + "\"}"; }
+
+                                ctx.Messages.Add(ToolMsg(id, name, result));
+                            }
+                            if (save != null) save(ctx);
+                            continue;
+                        }
+
+                        string final = resp.Content;
+                        ctx.Messages.Add(Msg("assistant", final, turnSteps, ThinkOf(turnThink)));
+                        return final;
                     }
 
-                    string final = resp.Content;
-                    ctx.Messages.Add(Msg("assistant", final, turnSteps, ThinkOf(turnThink)));
-                    return final;
+                    // ツール反復が上限に達した。
+                    // ここで諦めると長い作業が途中で切れるので、コンテキストを
+                    // 整理(要約)して続きを実行させる。
+                    if (compacted >= MAX_COMPACT_ROUNDS) break;
+
+                    ConsoleUi.Info("Compacting context after " + MAX_TURNS
+                        + " tool iterations (round " + (compacted + 1) + "/"
+                        + MAX_COMPACT_ROUNDS + ")...");
+                    ForceCompact(cfg, ctx);
+
+                    // 整理したうえで、続きを求める
+                    ctx.Messages.Add(Msg("user",
+                        "Continue from where you left off. Do not repeat what you"
+                        + " already did; finish the task with a final answer."));
+                    if (save != null) save(ctx);
                 }
+
                 throw new Exception("The LLM did not produce a final answer (too many tool iterations)");
             }
             finally

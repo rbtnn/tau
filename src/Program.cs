@@ -50,6 +50,7 @@ namespace Tau
             bool configEdit = false;
             string configSetKey = null;
             string configSetValue = null;
+            string executeText = null;    // -e / --execute のプロンプト
 
             for (int i = 0; i < args.Length; i++)
             {
@@ -87,6 +88,10 @@ namespace Tau
                 else if (a == "--open" && i + 1 < args.Length) sessionArg = args[++i].Trim();
                 else if (a.StartsWith("--open=")) sessionArg = a.Substring("--open=".Length);
                 else if (a == "--new") newSession = true;
+                else if (a == "-e" && i + 1 < args.Length) executeText = args[++i];
+                else if (a == "--execute" && i + 1 < args.Length) executeText = args[++i];
+                else if (a.StartsWith("--execute=")) executeText = a.Substring("--execute=".Length);
+                else if (a.StartsWith("-e=")) executeText = a.Substring("-e=".Length);
                 else if (a == "--help" || a == "-h" || a == "/?") help = true;
                 else if (a == "--list") { ListSessions(configPath); return; }
                 else if (a == "--debug") LlmClient.EnableDebug();
@@ -187,6 +192,7 @@ namespace Tau
             if (web) { RunWeb(cfg, webPort, sessionArg); return; }
 
             Chat chat = new Chat(cfg);
+            if (executeText != null) { chat.RunOnce(sessionArg, newSession, executeText); return; }
             chat.Run(sessionArg, newSession);
         }
 
@@ -634,6 +640,7 @@ namespace Tau
             Console.WriteLine("  --config set <k> <v> Change a single setting (e.g. --config set model gpt-4o)");
             Console.WriteLine("                       The settings contain the path to the config file (tau.json)");
             Console.WriteLine("  --config edit        Edit settings interactively");
+            Console.WriteLine("  -e, --execute <text> Send one prompt and exit (not saved to a session)");
             Console.WriteLine("  --new                Start a new session");
             Console.WriteLine("  --open <n/id>        Open an existing session and continue it");
             Console.WriteLine("  --list               List saved sessions and exit");

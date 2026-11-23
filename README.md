@@ -39,6 +39,7 @@ dotnet publish tau-cli.csproj -c Release -r linux-x64 \
 tau.exe [オプション]
 
   --version            ビルド識別子を表示して終了
+  -e, --execute <text> 1 回だけプロンプトを送って終了（セッションに保存しない）
   --config show        現在の設定を表示
   --config set <k> <v> 設定を 1 項目だけ変更 (例: --config set model gpt-4o)
                        設定には設定ファイル(tau.json)のパスも含まれます
@@ -55,6 +56,49 @@ tau.exe [オプション]
 ```
 
 > `--config <path>` のように**パスを直接渡す**書き方も引き続き使えます。
+
+### 1 回だけ実行する（`-e`）
+
+`-e` を付けると、プロンプトを 1 回送って終了します。**セッションには保存しません**。
+スクリプトやテストから使えます。
+
+```
+tau.exe -e "このコードを説明して"
+tau.exe -e "1行目
+2行目"
+```
+
+- バナー・進捗表示・`Bye.` の行は出ません（結果だけが出力されます）
+- セッションを作らないので、`%APPDATA%\tau-cli\sessions` は変わりません
+- `--open` と併用すると、そのセッションの履歴を文脈として使えます（書き換えません）
+
+### 複数行を入力する
+
+ソースコードを貼り付ける場合は、**クリップボードからそのまま貼り付け**られます。
+
+```
+> [Ctrl-V]      ← クリップボードの内容がそのまま入る
+  (pasted 12 lines)
+```
+
+- 改行・空行・インデントがそのまま保持されます
+- 1 行に潰れないので、コードをそのまま貼れます
+
+**パイプやファイルからも渡せます。**
+
+```
+tau.exe < prompt.txt
+type prompt.txt | tau.exe
+```
+
+`/exit` などのコマンド行が来るまでを **1 つのメッセージ**として送ります。
+
+```
+$ printf 'def f(x):\n    return x\n/exit\n' | tau.exe
+→ "def f(x):\n    return x" を 1 メッセージとして送信
+```
+
+> `"""` や `\` による区切りは採用していません。ソースコードに普通に現れるためです。
 
 ### 設定をコマンドラインから扱う
 
@@ -981,6 +1025,28 @@ TLS などの内部エラーは**内部例外のメッセージ**も併記しま
 `summary` と `contextStart` を更新します（`agentweb` と同じ方式）。
 要約はセッションに保存されるため、再開しても引き継がれます。
 
+### ツール反復の上限に達したとき
+
+1 ターンでツールを呼べる回数は `MAX_TURNS`（10 回）までです。
+以前は上限に達すると
+
+```
+⚠ Error: The LLM did not produce a final answer (too many tool iterations)
+```
+
+で打ち切っていましたが、長い作業が途中で切れてしまいます。
+現在は**コンテキストを要約して続行**します。
+
+```
+  · Compacting context after 10 tool iterations (round 1/2)...
+  （続きを求めるメッセージを送り、処理を再開）
+```
+
+- 要約は最大 2 回まで（`MAX_COMPACT_ROUNDS`）
+- それでも終わらない場合は、従来どおりエラーにします（無限ループ防止）
+- 要約対象が空にならないよう、適切な切断点が無い場合は
+  直近 4 件を残してそれ以前をまとめます
+
 ---
 
 ## テスト
@@ -1038,9 +1104,12 @@ Python は不要です。
 | `tests/EncodingIntegrationTests.cs` | 日本語・NUL・長文入力・`--test` |
 | `tests/WebIntegrationTests.cs` | `--web` の画面・SSE・CSRF 拒否・404 |
 | `tests/OutputIntegrationTests.cs` | 改行・進行状況・データ移行・デバッグ出力 |
+| `tests/MultiLineInputTests.cs` | パイプ入力の複数行・コマンドでの区切り |
+| `tests/ExecuteOptionTests.cs` | `-e` の実行・セッション非保存・出力の整形 |
+| `tests/CompactionTests.cs` | ツール反復上限でのコンパクションと続行 |
 
 ```
-Passed!  - Failed: 0, Passed: 306, Skipped: 0, Total: 306
+Passed!  - Failed: 0, Passed: 379, Skipped: 0, Total: 379
 ```
 
 所要時間は約 30 秒です。

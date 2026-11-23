@@ -57,8 +57,12 @@ namespace Tau
             SessionCtx c = new SessionCtx();
             c.Id = store.NewId();
             c.Title = "New conversation";
-            store.Save(c.Id, c.Messages, c.Title);
-            store.SetLastSessionId(c.Id);
+            // -e / --execute ではディスクに書かない
+            if (!noSave)
+            {
+                store.Save(c.Id, c.Messages, c.Title);
+                store.SetLastSessionId(c.Id);
+            }
             return c;
         }
 
@@ -76,6 +80,7 @@ namespace Tau
 
         void Save(SessionCtx c)
         {
+            if (noSave) return;
             store.Save(c.Id, c.Messages, c.Title, c.Summary, c.ContextStart);
         }
 
@@ -90,6 +95,25 @@ namespace Tau
         }
 
         // ---------------- 実行 ----------------
+
+        // -e / --execute のときは true。セッションに書き込まない。
+        // スクリプトから何度も呼ばれる用途を想定し、履歴を残さない。
+        bool noSave;
+
+        // 1 回だけ実行して終わる(-e / --execute)。
+        // 対話ループには入らない。テストやスクリプトから使える。
+        public void RunOnce(string sessionArg, bool forceNew, string prompt)
+        {
+            noSave = true;
+
+            string openId = (sessionArg != null && sessionArg.Trim().Length > 0)
+                ? ResolveSessionId(sessionArg) : "";
+            ctx = forceNew ? LoadOrCreate("", false) : LoadOrCreate(openId, true);
+
+            // バナーは出さない(出力をそのままパイプで使えるようにする)
+            Turn(prompt);
+            // 保存はしない(noSave により Turn 内の Save も抑止される)
+        }
 
         public void Run(string sessionArg, bool forceNew = false)
         {
@@ -122,6 +146,18 @@ namespace Tau
 
             int nulLost = 0;   // 連続して入力が NUL で失われた回数
 
+            // 入力がリダイレクトされている場合(パイプ・ファイル)は、
+            // 残りをまとめて読んでおく。1 行ずつ読むと、ソースコードを
+            // 貼り付けたときに 1 行ずつ別メッセージとして送られてしまう。
+            bool inputRedirected = false;
+            try { inputRedirected = Console.IsInputRedirected; }
+            catch { }
+
+            // パイプ入力のときは、読みすぎた 1 行を押し戻せるようにする。
+            // (/clear などの確認プロンプトが同じ stdin から読むため、
+            //  先読みしすぎると確認に答えられなくなる)
+            pushedBack = null;
+
             while (true)
             {
                 string line;
@@ -131,7 +167,23 @@ namespace Tau
                 waitingForInput = true;
                 try
                 {
-                    line = LineEditor.ReadLineColored("> ", "36");
+                    if (inputRedirected)
+                    {
+                        // パイプ入力: コマンド行でない行が続く限り 1 メッセージに
+                        // まとめる。確認プロンプトが続けて読めるよう、余分に
+                        // 読んだ 1 行は押し戻す。
+                        line = ReadPipedMessage();
+                        if (line == null) { /* EOF */ }
+                        else
+                        {
+                            ConsoleUi.Accent("> ");
+                            Console.WriteLine(line);
+                        }
+                    }
+                    else
+                    {
+                        line = LineEditor.ReadLineColored("> ", "36");
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -204,21 +256,27 @@ namespace Tau
 
                 // Ctrl-V が SYN(0x16)として届いた場合は、クリップボードの
                 // 内容に置き換える(コンソールの行編集が使えない環境向け)。
+                //
+                // 改行はそのまま残す。ソースコードを貼り付けたときに
+                // 1 行に潰れると読めなくなるため。複数行になった場合は
+                // そのまま 1 つのメッセージとして送る。
                 if (line.IndexOf('\u0016') >= 0)
                 {
                     string clip = LineEditor.GetClipboardText();
-                    if (clip != null && clip.Length > 0)
-                    {
-                        // 貼り付け先が 1 行だけなので、改行は空白にする
-                        clip = clip.Replace("\r\n", " ").Replace("\n", " ").Replace("\r", " ");
-                        line = line.Replace("\u0016", clip);
-                    }
-                    else
+                    if (clip == null || clip.Length == 0)
                     {
                         ConsoleUi.Danger("⚠ Ctrl-V: the clipboard is empty"
                             + " or could not be read.\n");
                         continue;
                     }
+
+                    // 貼り付け位置に差し込む(前後に打った文字は残す)
+                    line = line.Replace("\u0016", clip.TrimEnd('\r', '\n'));
+
+                    // 何行貼り付けたかを知らせる
+                    int lines = line.Split('\n').Length;
+                    if (lines > 1)
+                        ConsoleUi.Dim("  (pasted " + lines + " lines)\n");
                 }
 
                 line = line.Trim();
@@ -235,6 +293,73 @@ namespace Tau
 
             Console.WriteLine();
             ConsoleUi.Dim("Bye. Session: " + ctx.Id);
+        }
+
+        // パイプ入力から 1 つのメッセージを読む。
+        //
+        // コマンド行(/)に当たるまでを 1 メッセージにまとめる。
+        // 先読みしすぎると /clear などの確認プロンプトが stdin から
+        // 読めなくなるため、読みすぎた 1 行は pushedBack に戻して
+        // 次回または確認プロンプトで使えるようにする。
+        //
+        // EOF なら null。
+        // パイプ入力で読みすぎた 1 行。確認プロンプトもここから読む。
+        string pushedBack;
+
+        // パイプ入力から 1 行読む(押し戻しを考慮する)。
+        // 確認プロンプト用。
+        string ReadLineForPrompt(string prompt)
+        {
+            if (pushedBack != null)
+            {
+                string ln = pushedBack;
+                pushedBack = null;
+                Console.Write(prompt);
+                Console.WriteLine(ln);
+                return ln;
+            }
+            return LineEditor.ReadLine(prompt);
+        }
+
+        string ReadPipedMessage()
+        {
+            string first;
+            if (pushedBack != null)
+            {
+                first = pushedBack;
+                pushedBack = null;
+            }
+            else
+            {
+                try { first = Console.ReadLine(); }
+                catch { return null; }
+                if (first == null) return null;
+            }
+
+            // コマンド行なら 1 行だけ返す
+            if (first.TrimStart().StartsWith("/")) return first;
+
+            StringBuilder sb = new();
+            sb.Append(first);
+
+            while (true)
+            {
+                string ln;
+                try { ln = Console.ReadLine(); }
+                catch { break; }
+                if (ln == null) break;
+
+                // コマンド行に当たったら、そこで区切る。
+                // この行は次の呼び出し(または確認プロンプト)で使う。
+                if (ln.TrimStart().StartsWith("/"))
+                {
+                    pushedBack = ln;
+                    break;
+                }
+
+                sb.Append('\n').Append(ln);
+            }
+            return sb.ToString();
         }
 
         // コマンド名と、省略したときに受け付ける最短の長さ。
@@ -452,7 +577,7 @@ namespace Tau
                 return;
             }
 
-            string ans = LineEditor.ReadLine("  Clear this session's history? ("
+            string ans = ReadLineForPrompt("  Clear this session's history? ("
                 + ctx.Messages.Count + " msgs)  [y/N]: ");
             ans = Program.SanitizeInput(ans).Trim().ToLowerInvariant();
             if (ans != "y" && ans != "yes")
@@ -499,7 +624,7 @@ namespace Tau
             string title = meta.ContainsKey("title") ? Json.AsString(meta["title"]) : "";
 
             // 誤操作を防ぐため確認する
-            string ans = LineEditor.ReadLine("  Delete " + id + "  (" + title + ")?  [y/N]: ");
+            string ans = ReadLineForPrompt("  Delete " + id + "  (" + title + ")?  [y/N]: ");
             ans = Program.SanitizeInput(ans).Trim().ToLowerInvariant();
             if (ans != "y" && ans != "yes")
             {
@@ -583,8 +708,31 @@ namespace Tau
         int progressTick = 0;
         int progressLen = 0;
 
+        // 出力がリダイレクトされているときは進行状況を出さない。
+        // パイプで受け取ったときに \r やスピナーが混ざるのを避ける。
+        //
+        // -e / --execute は結果だけを出力したいので常に抑制する。
+        bool ProgressEnabled()
+        {
+            if (noSave) return false;   // -e のときは静かにする
+            try { return !Console.IsOutputRedirected; }
+            catch { return true; }
+        }
+
+        // 種類が変わったときの区切り改行。
+        // 出力がリダイレクトされているときは、先頭の空行を作らないよう
+        // 最初の 1 回だけ省く(2 回目以降は種類の区切りとして必要)。
+        bool wroteAnyKind;
+
+        void SeparateKind()
+        {
+            if (!ProgressEnabled() && !wroteAnyKind) return;
+            Console.WriteLine();
+        }
+
         void ShowProgress(int chars)
         {
+            if (!ProgressEnabled()) return;
             progressTick++;
             string spin = SPINNER[progressTick % SPINNER.Length];
             string msg;
@@ -606,6 +754,7 @@ namespace Tau
 
         void ClearProgress()
         {
+            if (!ProgressEnabled()) return;
             if (progressLen <= 0) return;
             try
             {
@@ -628,8 +777,10 @@ namespace Tau
             StringBuilder contentBuf = new StringBuilder();   // 本文(Markdown)
             progressLen = 0;
             progressTick = 0;
+            wroteAnyKind = false;   // ターンごとにリセットする
 
-            Console.WriteLine();
+            // 出力がリダイレクトされているときは、先頭の空行も出さない
+            if (ProgressEnabled()) Console.WriteLine();
             if (LlmClient.DebugOn)
                 ConsoleUi.Dim("  sending " + userMessage.Length + " chars...\n");
             ShowProgress(0);
@@ -645,8 +796,9 @@ namespace Tau
                             // 「/ connecting...」が残っていると同じ行に本文が
                             // 続いてしまうので、必ず消してから改行する。
                             ClearProgress();
-                            if (kind != KIND_NONE) Console.WriteLine();
+                            if (kind != KIND_NONE) SeparateKind();
                             kind = KIND_CONTENT;
+                            wroteAnyKind = true;
                         }
                         contentBuf.Append(d);
                         // Markdown として整形するため本文はバッファするが、
@@ -661,8 +813,9 @@ namespace Tau
                             // 「/ connecting...」の行に [thinking] が
                             // 続かないよう、まず進行状況を消す。
                             ClearProgress();
-                            if (kind != KIND_NONE) Console.WriteLine();
+                            if (kind != KIND_NONE) SeparateKind();
                             kind = KIND_THINK;
+                            wroteAnyKind = true;
                             Console.Write("  ");
                             ConsoleUi.Dim("[thinking] ");
                         }
@@ -672,7 +825,7 @@ namespace Tau
                     {
                         ClearProgress();
                         // ツール実行は必ず単独の行にする
-                        if (kind != KIND_NONE) Console.WriteLine();
+                        if (kind != KIND_NONE) SeparateKind();
                         ConsoleUi.Tool(name, detail);
                         kind = KIND_NONE;   // ツール行は改行済みなので次はそのまま始められる
                     },
@@ -683,7 +836,7 @@ namespace Tau
                 if (cancelled)
                 {
                     // Ctrl-C で中止した。途中までの本文は出さず、その旨を伝える。
-                    if (kind != KIND_NONE) Console.WriteLine();
+                    if (kind != KIND_NONE) SeparateKind();
                     ConsoleUi.Dim("  (cancelled)\n");
                     Console.WriteLine();
                     cancelled = false;
@@ -697,9 +850,14 @@ namespace Tau
                     : (reply ?? "");
                 if (body.Trim().Length > 0)
                 {
-                    if (kind != KIND_NONE) Console.WriteLine();
+                    // 本文はストリーミング中にバッファしたものを最後にまとめて
+                    // 描画する。種類の区切りは上のコールバックで済んでいるので
+                    // ここでは改行を足さない(先頭に空行が入ってしまう)。
+                    if (kind == KIND_NONE) SeparateKind();
                     MarkdownRenderer.Render(body);
-                    Console.WriteLine();
+                    // 対話中は読みやすさのため空行を入れるが、
+                    // -e では結果だけを出すので余分な改行を足さない。
+                    if (!noSave) Console.WriteLine();
                 }
                 else if (kind != KIND_NONE)
                 {
