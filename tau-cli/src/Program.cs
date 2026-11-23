@@ -180,7 +180,7 @@ namespace Tau
         // テストから使うための薄いラッパ
         internal static Dictionary<string, object> Msg(string role, string content)
         {
-            Dictionary<string, object> m = new Dictionary<string, object>();
+            Dictionary<string, object> m = new();
             m["role"] = role;
             m["content"] = content;
             return m;
@@ -460,20 +460,35 @@ namespace Tau
         }
 
         // ビルド識別子。古い tau.exe を動かしていないか確認できるようにする。
-        public const string BuildStamp = "2026-02-27 test-hooks";
+        public const string BuildStamp = "2026-11-23 dotnet10+json";
 
         internal static void PrintVersion()
         {
             Console.WriteLine("tau " + BuildStamp);
-            string loc = "";
-            try { loc = System.Reflection.Assembly.GetExecutingAssembly().Location; } catch { }
-            Console.WriteLine("  exe   : " + loc);
+
+            // 単一ファイル配布では Assembly.Location が空文字になるため、
+            // 実行中のプロセスのパスを使う。
+            string exePath = "";
+            try { exePath = Environment.ProcessPath; } catch { }
+            if (string.IsNullOrEmpty(exePath))
+            {
+                try
+                {
+                    exePath = Path.Combine(AppContext.BaseDirectory,
+                        Program.IsWindows() ? "tau.exe" : "tau");
+                }
+                catch { }
+            }
+            Console.WriteLine("  exe   : " + exePath);
+
             try
             {
                 Console.WriteLine("  built : "
-                    + File.GetLastWriteTimeUtc(loc).ToString("yyyy-MM-dd HH:mm:ss") + " UTC");
+                    + File.GetLastWriteTimeUtc(exePath).ToString("yyyy-MM-dd HH:mm:ss") + " UTC");
             }
             catch { }
+            Console.WriteLine("  runtime: " + Environment.Version
+                + " (" + System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier + ")");
         }
 
         internal static void PrintHelp()

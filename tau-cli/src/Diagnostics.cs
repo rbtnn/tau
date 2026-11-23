@@ -122,8 +122,8 @@ namespace Tau
             LlmClient.ApplyTls();
             Console.WriteLine("    TLS used : " + LlmClient.CurrentTls);
 
-            List<object> msgs = new List<object>();
-            Dictionary<string, object> m = new Dictionary<string, object>();
+            List<object> msgs = new();
+            Dictionary<string, object> m = new();
             m["role"] = "user";
             m["content"] = "ping";
             msgs.Add(m);
@@ -137,7 +137,7 @@ namespace Tau
             catch (WebException wex)
             {
                 ConsoleUi.Danger("    Result   : NG " + wex.Status + "\n");
-                Console.WriteLine("    Detail   : " + LlmClient.DescribeWebException(wex));
+                Console.WriteLine("    Detail   : " + LlmClient.DescribeError(wex));
                 Console.WriteLine("    Chain    : " + LlmClient.ExceptionChain(wex));
             }
             catch (Exception ex)
@@ -155,15 +155,15 @@ namespace Tau
                 StringBuilder got = new StringBuilder();
                 int chunks = 0;
                 LlmClient.CallStream(cfg, msgs, false,
-                    delegate (string d) { chunks++; if (got.Length < 200) got.Append(d); },
-                    delegate (string d) { });
+                    (d) => { chunks++; if (got.Length < 200) got.Append(d); },
+                    (d) => { });
                 Console.WriteLine("    Result   : OK  (" + chunks + " chunks received)");
                 Console.WriteLine("    Reply    : " + FirstLine(got.ToString()));
             }
             catch (WebException wex)
             {
                 ConsoleUi.Danger("    Result   : NG " + wex.Status + "\n");
-                Console.WriteLine("    Detail   : " + LlmClient.DescribeWebException(wex));
+                Console.WriteLine("    Detail   : " + LlmClient.DescribeError(wex));
                 Console.WriteLine("    Chain    : " + LlmClient.ExceptionChain(wex));
             }
             catch (Exception ex)
@@ -208,10 +208,7 @@ namespace Tau
                 c.EndConnect(ar);
 
                 ssl = new System.Net.Security.SslStream(client.GetStream(), false,
-                    delegate(object sender, System.Security.Cryptography.X509Certificates.X509Certificate cert,
-                             System.Security.Cryptography.X509Certificates.X509Chain chain,
-                             System.Net.Security.SslPolicyErrors errors)
-                    {
+                    (sender, cert, chain, errors) => {
                         // 証明書の検証は行う(検証失敗はそのまま例外になる)
                         return errors == System.Net.Security.SslPolicyErrors.None;
                     });
@@ -221,7 +218,14 @@ namespace Tau
 
                 string ver = "?";
                 try { ver = ssl.SslProtocol.ToString(); } catch { }
-                return "OK  " + ver + " / " + ssl.CipherAlgorithm.ToString();
+                string cipher = "?";
+                try
+                {
+                    // 交渉された暗号スイート(.NET 8 以降)
+                    cipher = ssl.NegotiatedCipherSuite.ToString();
+                }
+                catch { }
+                return "OK  " + ver + " / " + cipher;
             }
             catch (Exception ex)
             {

@@ -230,7 +230,7 @@ namespace Tau
 
         public Dictionary<string, object> ToDict()
         {
-            Dictionary<string, object> m = new Dictionary<string, object>();
+            Dictionary<string, object> m = new();
             m["llmApiUrl"] = ApiBaseUrl;
             m["llmApiKey"] = SecretKey;
             m["model"] = Model;

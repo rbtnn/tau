@@ -101,8 +101,7 @@ namespace Tau
 
             // Ctrl-C はプロセスを終了させず、現在のターンだけ中止する。
             // e.Cancel = true で既定の終了動作を抑止する。
-            Console.CancelKeyPress += delegate (object sender, ConsoleCancelEventArgs e)
-            {
+            Console.CancelKeyPress += (sender, e) => {
                 e.Cancel = true;          // プロセスを終了しない
                 ctrlCPressed = true;
                 cancelled = true;         // 実行中のターンを中止する
@@ -428,7 +427,7 @@ namespace Tau
             }
 
             // 履歴・要約・コンテキスト開始位置をリセットする
-            ctx.Messages = new List<object>();
+            ctx.Messages = new();
             ctx.Summary = "";
             ctx.ContextStart = 0;
             ctx.LastTotalTokens = 0;
@@ -602,9 +601,8 @@ namespace Tau
             try
             {
                 string reply = agent.RunStream(ctx, userMessage,
-                    delegate (SessionCtx c) { Save(c); },
-                    delegate (string d)
-                    {
+                    (c) => { Save(c); },
+                    (d) => {
                         // 本文はバッファする(Markdown として整形して表示するため)
                         if (kind != KIND_CONTENT)
                         {
@@ -617,8 +615,7 @@ namespace Tau
                         // 受信した文字数を進行状況として表示する。
                         ShowProgress(contentBuf.Length);
                     },
-                    delegate (string d)
-                    {
+                    (d) => {
                         if (kind != KIND_THINK)
                         {
                             if (kind != KIND_NONE) Console.WriteLine();
@@ -628,15 +625,14 @@ namespace Tau
                         }
                         ConsoleUi.Think(d);
                     },
-                    delegate (string name, string detail)
-                    {
+                    (name, detail) => {
                         ClearProgress();
                         // ツール実行は必ず単独の行にする
                         if (kind != KIND_NONE) Console.WriteLine();
                         ConsoleUi.Tool(name, detail);
                         kind = KIND_NONE;   // ツール行は改行済みなので次はそのまま始められる
                     },
-                    delegate () { return cancelled; });
+                    () => cancelled);
 
                 ClearProgress();
 
@@ -683,7 +679,7 @@ namespace Tau
 
                 string msg;
                 WebException wex = ex as WebException;
-                if (wex != null) msg = LlmClient.DescribeWebException(wex);
+                if (wex != null) msg = LlmClient.DescribeError(wex);
                 else msg = ex.Message;
                 ConsoleUi.Danger("⚠ Error: " + msg + "\n");
 

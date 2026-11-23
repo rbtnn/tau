@@ -12,16 +12,27 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
+using System.Net.Http;
+using System.Net.Security;
+using System.Security.Authentication;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Tau
 {
     static class LlmClient
     {
         // 処理中のリクエスト(Ctrl+C で中断するため)
-        static volatile HttpWebRequest current;
+        static volatile CancellationTokenSource currentCts;
+
+        // 使い回す HttpClient(接続プールを共有する)
+        static HttpClient client;
+        static readonly object clientLock = new object();
+
+        // 設定が変わったら作り直す
+        static string clientKey = "";
 
         // ---- デバッグ出力 ----
         // 環境変数 TAU_DEBUG=1 で有効になる。既定は無効(通常利用では出さない)。
@@ -71,60 +82,55 @@ namespace Tau
             catch { }
             try
             {
-                sb.Append(" SecurityProtocol=").Append(ServicePointManager.SecurityProtocol)
-                  .Append("(").Append((int)ServicePointManager.SecurityProtocol).Append(")");
+                sb.Append(" TLS=").Append(CurrentTls);
             }
-            catch (Exception ex) { sb.Append(" SecurityProtocol=<").Append(ex.Message).Append(">"); }
+            catch { }
             try
             {
-                sb.Append(" enum=[").Append(string.Join(", ",
-                    Enum.GetNames(typeof(SecurityProtocolType)))).Append("]");
+                sb.Append(" rti=").Append(
+                    System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier);
             }
             catch { }
             return sb.ToString();
         }
 
-        // TLS のバージョンを設定する。
-        //
-        // SystemDefault(値 0) は使わない。
-        //  - .NET Framework 4.7 未満では設定自体が拒否され
-        //    「指定された値は 'SslProtocolType' 列挙で有効ではありません」
-        //    になる。
-        //  - 設定できたとしても、4.6.1 以前をターゲットにしたアプリでは
-        //    実効値が TLS 1.0 のままになる。
-        //  - Mono でも受け付け方は環境依存で、実際の交渉は保証されない。
-        //
-        // Tls13 も使わない。
-        //  - Mono や古い .NET では解釈できず、同じ SslProtocolType エラーになる。
-        //
-        // TLS 1.2 は Windows 7 以降で必ず使えるため、これを単独で指定するのが
-        // 最も安全で確実。
+        // 使う TLS バージョン。
+        // TLS 1.2 以上を明示する。.NET 10 の既定は OS に任せる形なので、
+        // 古い TLS 1.0/1.1 しか使わないサーバ以外はこれで足りる。
+        public static SslProtocols PreferredTls
+        {
+            get { return SslProtocols.Tls12 | SslProtocols.Tls13; }
+        }
+
+        // HttpClient のハンドラに TLS の設定を反映する。
+        public static void ApplyTlsTo(SocketsHttpHandler handler)
+        {
+            try
+            {
+                handler.SslOptions.EnabledSslProtocols = PreferredTls;
+                handler.SslOptions.RemoteCertificateValidationCallback =
+                    (sender, cert, chain, errors) => {
+                        return (errors == SslPolicyErrors.None);
+                    };
+            }
+            catch (Exception ex)
+            {
+                Dbg("TLS: failed to apply: " + ex.Message);
+            }
+        }
+
+        // 互換用: 何もしない(設定はハンドラ単位で行う)
         public static void ApplyTls()
         {
             lock (tlsLock)
             {
-                string before = SafeCurrentTls();
-                try
-                {
-                    ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
-                    tlsApplied = true;
-                }
-                catch (Exception ex)
-                {
-                    Dbg("TLS: failed to set Tls12: " + ex.Message);
-                }
-                Dbg("TLS: " + before + " -> " + SafeCurrentTls());
+                tlsApplied = true;
             }
         }
 
         static string SafeCurrentTls()
         {
-            try
-            {
-                SecurityProtocolType p = ServicePointManager.SecurityProtocol;
-                return p.ToString() + "(" + (int)p + ")";
-            }
-            catch { return "unknown"; }
+            return PreferredTls.ToString() + "(" + (int)PreferredTls + ")";
         }
 
         // 現在の TLS 設定(エラー表示用)
@@ -148,14 +154,21 @@ namespace Tau
         }
 
         // TLS ハンドシェイク失敗かどうか
-        public static bool IsTlsFailure(WebException wex)
+        public static bool IsTlsFailure(Exception ex)
         {
-            if (wex == null) return false;
-            if (wex.Status == WebExceptionStatus.SecureChannelFailure) return true;
-            if (wex.Status == WebExceptionStatus.TrustFailure) return false;  // 証明書の問題
+            if (ex == null) return false;
 
-            // 内部例外に TLS/SslStream 系が含まれていればハンドシェイク失敗とみなす
-            Exception e = wex.InnerException;
+            // 証明書の問題は TLS バージョンの話ではないので除外する
+            if (ex is System.Security.Authentication.AuthenticationException)
+            {
+                string m0 = ex.Message ?? "";
+                if (m0.IndexOf("certificate", StringComparison.OrdinalIgnoreCase) >= 0
+                    || m0.IndexOf("証明書", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return false;
+                return true;
+            }
+
+            Exception e = ex;
             int depth = 0;
             while (e != null && depth < 4)
             {
@@ -165,11 +178,6 @@ namespace Tau
                     n.IndexOf("Tls", StringComparison.OrdinalIgnoreCase) >= 0)
                     return true;
 
-                // 実測: 無効なプロトコルを要求すると、WebException の Status は
-                // ReceiveFailure で、内部例外が
-                //   ArgumentException: 指定された値は 'SslProtocolType' 列挙で
-                //                      有効ではありません。パラメーター名:sslProtocolType
-                // になる。これも TLS の設定不備なので、一段上げて再試行する。
                 if (e is ArgumentException)
                 {
                     string m = e.Message ?? "";
@@ -185,39 +193,76 @@ namespace Tau
 
         public static void Cancel()
         {
-            HttpWebRequest r = current;
-            if (r != null)
+            CancellationTokenSource c = currentCts;
+            if (c != null)
             {
-                try { r.Abort(); } catch { }
+                try { c.Cancel(); } catch { }
             }
         }
 
-        static void Setup(HttpWebRequest request, Config cfg, byte[] payload)
+        // HttpClient を(設定に応じて)用意する。
+        // 設定が変わったら作り直す。
+        static HttpClient GetClient(Config cfg)
+        {
+            string key = (cfg.ApiBaseUrl ?? "") + "|" + cfg.UseSystemProxy + "|"
+                + (cfg.ProxyUrl ?? "") + "|" + (cfg.ProxyUser ?? "");
+
+            lock (clientLock)
+            {
+                if (client != null && clientKey == key) return client;
+
+                if (client != null)
+                {
+                    try { client.Dispose(); } catch { }
+                    client = null;
+                }
+
+                SocketsHttpHandler handler = new SocketsHttpHandler();
+
+                // TLS の設定
+                ApplyTlsTo(handler);
+
+                // プロキシ設定
+                try
+                {
+                    ProxyHelper.ApplyHttp(handler, cfg);
+                }
+                catch (Exception ex)
+                {
+                    Dbg("proxy setup failed: " + ex.Message);
+                }
+
+                // リダイレクトは追わない(API は 3xx を返さない)
+                handler.AllowAutoRedirect = false;
+
+                // 接続を使い回す
+                handler.PooledConnectionLifetime = TimeSpan.FromMinutes(5);
+                handler.PooledConnectionIdleTimeout = TimeSpan.FromSeconds(30);
+
+                // 応答をバッファしない(SSE を逐次読むため)
+                handler.ResponseDrainTimeout = TimeSpan.FromSeconds(2);
+
+                client = new HttpClient(handler);
+                client.Timeout = TimeSpan.FromSeconds(180);
+
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("tau/1.0");
+                clientKey = key;
+                return client;
+            }
+        }
+
+        // リクエストを組み立てる
+        static HttpRequestMessage BuildRequest(Config cfg, byte[] payload)
         {
             ApplyTls();
-            ProxyHelper.Apply(request, cfg);
-            request.Method = "POST";
-            request.ContentType = "application/json";
-            request.Accept = "text/event-stream";
-            request.Headers["Authorization"] = "Bearer " + cfg.SecretKey;
-            request.ContentLength = payload.Length;
-            request.Timeout = 180000;
-            request.ReadWriteTimeout = 180000;
 
-            // SSE は応答が長く続くため、次の設定が重要になる。
-            //  - Expect: 100-continue は一部のプロキシ/サーバで
-            //    「受信時に予期しないエラー」の原因になるので無効化する。
-            //  - HTTP/1.1 で KeepAlive を有効にし、接続を使い回す。
-            //  - 途中で切れないよう、バッファリングを小さめにする必要は無いが、
-            //    Nagle を無効にして小さなチャンクを即座に送る。
-            request.ServicePoint.Expect100Continue = false;
-            request.KeepAlive = true;
-            request.ProtocolVersion = HttpVersion.Version11;
-            request.ServicePoint.UseNagleAlgorithm = false;
-            // 応答がチャンク形式で届く場合に備える
-            request.SendChunked = false;
-            request.AllowReadStreamBuffering = false;
-            request.AllowWriteStreamBuffering = true;
+            HttpRequestMessage req = new HttpRequestMessage(HttpMethod.Post, cfg.ApiBaseUrl);
+            req.Content = new ByteArrayContent(payload);
+            req.Content.Headers.ContentType =
+                new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+            req.Headers.Accept.ParseAdd("text/event-stream");
+            if (!string.IsNullOrEmpty(cfg.SecretKey))
+                req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + cfg.SecretKey);
 
             if (DebugOn)
             {
@@ -225,53 +270,36 @@ namespace Tau
                 Dbg("  URL      : " + cfg.ApiBaseUrl);
                 Dbg("  Model    : " + cfg.Model);
                 Dbg("  TLS      : " + CurrentTls);
-                Uri u = new Uri(cfg.ApiBaseUrl);
-                string proxyDesc;
-                if (request.Proxy == null) proxyDesc = "null (direct connection)";
-                else if (request.Proxy.IsBypassed(u)) proxyDesc = "direct connection (proxy bypassed)";
-                else proxyDesc = request.Proxy.GetProxy(u).ToString();
-                Dbg("  Proxy    : " + proxyDesc);
-                Dbg("  useSystemProxy=" + cfg.UseSystemProxy
-                    + " proxyUrl='" + (cfg.ProxyUrl ?? "") + "'");
-                Dbg("  HTTP     : " + request.ProtocolVersion);
-                Dbg("  Expect100: " + request.ServicePoint.Expect100Continue);
-                Dbg("  KeepAlive: " + request.KeepAlive);
-                Dbg("  Timeout  : " + request.Timeout + "ms / R/W " + request.ReadWriteTimeout + "ms");
+                Dbg("  Proxy    : " + DescribeProxy(cfg));
                 Dbg("  Body     : " + payload.Length + " bytes");
                 Dbg("----------------------");
             }
+            return req;
+        }
+
+        // プロキシ設定を 1 行で表す
+        static string DescribeProxy(Config cfg)
+        {
+            if (!cfg.UseSystemProxy && string.IsNullOrEmpty(cfg.ProxyUrl))
+                return "direct connection";
+            if (string.IsNullOrEmpty(cfg.ProxyUrl))
+                return "system default";
+            return cfg.ProxyUrl;
         }
 
         // WebException の内容を、原因が分かる形に整形する
-        public static string DescribeWebException(WebException wex)
+        public static string DescribeError(Exception ex)
         {
-            if (wex == null) return "";
+            if (ex == null) return "";
+
+            HttpRequestException hex = ex as HttpRequestException;
+            if (hex != null && hex.StatusCode != null)
+                return hex.Message;   // ステータスと本文は生成時に含めている
+
             StringBuilder sb = new StringBuilder();
-            sb.Append(wex.Message);
-            sb.Append(" (status=").Append(wex.Status).Append(")");
+            sb.Append(ex.Message);
 
-            // HTTP ステータスが返っている場合は本文も読む(原因が書かれていることが多い)
-            if (wex.Response != null)
-            {
-                try
-                {
-                    HttpWebResponse resp = wex.Response as HttpWebResponse;
-                    if (resp != null) sb.Append(" [HTTP ").Append((int)resp.StatusCode).Append("]");
-                    using (Stream rs = wex.Response.GetResponseStream())
-                    {
-                        string body = ToolExecutor.DecodeBytesPublic(ToolExecutor.ReadAllBytesPublic(rs));
-                        if (body.Length > 0)
-                        {
-                            if (body.Length > 400) body = body.Substring(0, 400) + "...";
-                            sb.Append(" ").Append(body);
-                        }
-                    }
-                }
-                catch { }
-            }
-
-            // 内部例外(TLS ハンドシェイク失敗など)は原因がここに出る
-            Exception inner = wex.InnerException;
+            Exception inner = ex.InnerException;
             int depth = 0;
             while (inner != null && depth < 3)
             {
@@ -285,12 +313,12 @@ namespace Tau
         // API に送るメッセージから、保存専用メタデータ(ts/steps/think)を取り除く
         static List<object> ApiMessages(List<object> messages)
         {
-            List<object> apiMessages = new List<object>();
+            List<object> apiMessages = new();
             foreach (object o in messages)
             {
                 Dictionary<string, object> m = o as Dictionary<string, object>;
                 if (m == null) { apiMessages.Add(o); continue; }
-                Dictionary<string, object> c = new Dictionary<string, object>();
+                Dictionary<string, object> c = new();
                 foreach (KeyValuePair<string, object> kv in m)
                     if (kv.Key != "ts" && kv.Key != "steps" && kv.Key != "think") c[kv.Key] = kv.Value;
                 apiMessages.Add(c);
@@ -300,7 +328,7 @@ namespace Tau
 
         static Dictionary<string, object> BuildBody(Config cfg, List<object> messages, bool useTools, bool stream)
         {
-            Dictionary<string, object> body = new Dictionary<string, object>();
+            Dictionary<string, object> body = new();
             body["model"] = cfg.Model;
             body["messages"] = ApiMessages(messages);
             body["temperature"] = 0.7;
@@ -345,27 +373,37 @@ namespace Tau
             Dictionary<string, object> body = BuildBody(cfg, messages, useTools, false);
             byte[] payload = Encoding.UTF8.GetBytes(Json.ToString(body));
 
-            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(cfg.ApiBaseUrl);
-            Setup(request, cfg, payload);
-            request.Accept = "application/json";
+            HttpClient c = GetClient(cfg);
+            CancellationTokenSource cts = new CancellationTokenSource();
+            currentCts = cts;
 
-            current = request;
             string responseBody;
             try
             {
-                using (Stream s = request.GetRequestStream())
-                    s.Write(payload, 0, payload.Length);
-                using (HttpWebResponse resp = (HttpWebResponse)request.GetResponse())
-                using (StreamReader sr = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
-                    responseBody = sr.ReadToEnd();
+                using (HttpRequestMessage req = BuildRequest(cfg, payload))
+                using (HttpResponseMessage resp = c.Send(req, HttpCompletionOption.ResponseContentRead,
+                                                          cts.Token))
+                {
+                    responseBody = resp.Content.ReadAsStringAsync(cts.Token).GetAwaiter().GetResult();
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        string preview = responseBody ?? "";
+                        if (preview.Length > 400) preview = preview.Substring(0, 400) + "...";
+                        throw new HttpRequestException(
+                            "LLM API error: HTTP " + (int)resp.StatusCode
+                            + " " + resp.ReasonPhrase + " " + preview,
+                            null, resp.StatusCode);
+                    }
+                }
             }
-            catch (WebException)
+            catch (OperationCanceledException)
             {
-                throw;   // TLS 失敗の再試行をラッパーが判断できるよう、そのまま投げる
+                throw new LlmCancelledException();
             }
             finally
             {
-                current = null;
+                currentCts = null;
+                try { cts.Dispose(); } catch { }
             }
 
             return ParseOnce(responseBody);
@@ -433,51 +471,59 @@ namespace Tau
                 {
                     return CallStreamOnce(cfg, messages, useTools, contentCb, reasoningCb);
                 }
-                catch (WebException wex)
+                catch (Exception ex)
                 {
-                    Dbg("WebException: status=" + wex.Status + " (attempt " + attempt + "/" + MAX_ATTEMPTS + ")");
-                    Dbg("  chain: " + ExceptionChain(wex));
+                    // 中止は再試行しない
+                    if (ex is LlmCancelledException) throw;
 
-                    bool retryable = IsRetryable(wex);
-                    Dbg("  IsTlsFailure=" + IsTlsFailure(wex) + " retryable=" + retryable);
+                    bool retryable = IsRetryable(ex);
+                    Dbg("attempt " + attempt + "/" + MAX_ATTEMPTS
+                        + " failed: " + ex.GetType().Name + " retryable=" + retryable);
+                    Dbg("  chain: " + ExceptionChain(ex));
 
                     if (!retryable || attempt >= MAX_ATTEMPTS) throw;
 
-                    // TLS 設定をまだ変えられるなら変える
-                    if (IsTlsFailure(wex) && EscalateTls())
+                    if (IsTlsFailure(ex) && EscalateTls())
                         ConsoleUi.Info("Changing the TLS setting and retrying...");
                     else
                         ConsoleUi.Info("Retrying the connection (" + attempt + "/" + (MAX_ATTEMPTS - 1) + ")...");
 
                     // 少し待ってから再試行する(指数バックオフ)
-                    int wait = 500 * attempt;
-                    System.Threading.Thread.Sleep(wait);
+                    System.Threading.Thread.Sleep(500 * attempt);
                 }
             }
         }
 
         // 再試行する価値のある失敗か。
-        //  - TLS/接続系の一時的な失敗 → 再試行する
+        //  - 接続系の一時的な失敗 → 再試行する
         //  - HTTP エラー(401/429/500 など) → 再試行しても無駄なのでしない
-        public static bool IsRetryable(WebException wex)
+        public static bool IsRetryable(Exception ex)
         {
-            if (wex == null) return false;
-            switch (wex.Status)
+            if (ex == null) return false;
+            if (ex is LlmCancelledException) return false;
+
+            // HTTP ステータスが返っている場合は再試行しない
+            HttpRequestException hex = ex as HttpRequestException;
+            if (hex != null && hex.StatusCode != null) return false;
+
+            if (ex is HttpRequestException) return true;
+            if (ex is System.Net.Sockets.SocketException) return true;
+            if (ex is IOException) return true;
+            if (ex is TaskCanceledException) return true;   // タイムアウト
+            if (ex is System.Security.Authentication.AuthenticationException) return true;
+
+            // 内部例外も見る
+            Exception e = ex.InnerException;
+            int depth = 0;
+            while (e != null && depth < 4)
             {
-                case WebExceptionStatus.SecureChannelFailure:
-                case WebExceptionStatus.ConnectionClosed:
-                case WebExceptionStatus.KeepAliveFailure:
-                case WebExceptionStatus.ReceiveFailure:
-                case WebExceptionStatus.SendFailure:
-                case WebExceptionStatus.Timeout:
-                case WebExceptionStatus.ConnectFailure:   // 接続拒否は再試行しても無駄なことが多いが1回は試す
-                    return true;
-                case WebExceptionStatus.TrustFailure:
-                case WebExceptionStatus.ProtocolError:    // HTTP エラー
-                    return false;
-                default:
-                    return false;
+                if (e is System.Net.Sockets.SocketException) return true;
+                if (e is IOException) return true;
+                if (e is TaskCanceledException) return true;
+                e = e.InnerException;
+                depth++;
             }
+            return false;
         }
 
         static LlmResp CallStreamOnce(Config cfg, List<object> messages, bool useTools,
@@ -486,34 +532,47 @@ namespace Tau
             Dictionary<string, object> body = BuildBody(cfg, messages, useTools, true);
             byte[] payload = Encoding.UTF8.GetBytes(Json.ToString(body));
 
-            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(cfg.ApiBaseUrl);
-            Setup(request, cfg, payload);
+            HttpClient c = GetClient(cfg);
+            CancellationTokenSource cts = new CancellationTokenSource();
+            currentCts = cts;
 
             StringBuilder content = new StringBuilder();
-            Dictionary<int, StreamAcc> acc = new Dictionary<int, StreamAcc>();
+            Dictionary<int, StreamAcc> acc = new();
 
-            current = request;
             try
             {
                 Dbg("connecting: " + cfg.ApiBaseUrl);
-                using (Stream s = request.GetRequestStream())
-                    s.Write(payload, 0, payload.Length);
-                Dbg("sent (" + payload.Length + " bytes), waiting for response...");
-
-                using (HttpWebResponse resp = (HttpWebResponse)request.GetResponse())
-                using (StreamReader sr = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+                using (HttpRequestMessage req = BuildRequest(cfg, payload))
+                using (HttpResponseMessage resp = c.Send(req,
+                    HttpCompletionOption.ResponseHeadersRead, cts.Token))
                 {
+                    Dbg("sent (" + payload.Length + " bytes), waiting for response...");
+
                     if (DebugOn)
                     {
-                        Dbg("response: HTTP " + (int)resp.StatusCode + " " + resp.StatusDescription);
-                        Dbg("  ContentType  : " + resp.ContentType);
-                        Dbg("  ContentLength: " + resp.ContentLength);
-                        Dbg("  TransferEnc  : " + resp.Headers["Transfer-Encoding"]);
-                        Dbg("  Protocol     : " + resp.ProtocolVersion);
-                        Dbg("  Server       : " + resp.Server);
+                        Dbg("response: HTTP " + (int)resp.StatusCode + " " + resp.ReasonPhrase);
+                        Dbg("  ContentType  : " + resp.Content.Headers.ContentType);
+                        Dbg("  ContentLength: " + resp.Content.Headers.ContentLength);
                     }
 
-                    string ctype = (resp.ContentType == null) ? "" : resp.ContentType;
+                    if (!resp.IsSuccessStatusCode)
+                    {
+                        string errBody = resp.Content.ReadAsStringAsync(cts.Token)
+                            .GetAwaiter().GetResult();
+                        if (errBody == null) errBody = "";
+                        if (errBody.Length > 400) errBody = errBody.Substring(0, 400) + "...";
+                        throw new HttpRequestException(
+                            "LLM API error: HTTP " + (int)resp.StatusCode
+                            + " " + resp.ReasonPhrase + " " + errBody,
+                            null, resp.StatusCode);
+                    }
+
+                    string ctype = resp.Content.Headers.ContentType == null
+                        ? "" : resp.Content.Headers.ContentType.ToString();
+
+                    using (Stream rs = resp.Content.ReadAsStream(cts.Token))
+                    using (StreamReader sr = new StreamReader(rs, Encoding.UTF8))
+                    {
                     if (ctype.IndexOf("event-stream", StringComparison.OrdinalIgnoreCase) < 0)
                     {
                         // プロキシ等が stream:true を無視して通常の JSON を返した場合
@@ -609,12 +668,17 @@ namespace Tau
                                 + " Please try again.");
                         }
                     }
+                    }
                 }
             }
-            catch (WebException wex)
+            catch (OperationCanceledException)
             {
-                if (wex.Status == WebExceptionStatus.RequestCanceled) throw new LlmCancelledException();
-                throw;   // TLS 失敗の再試行をラッパーが判断できるよう、そのまま投げる
+                throw new LlmCancelledException();
+            }
+            catch (HttpRequestException)
+            {
+                // 接続断・TLS 失敗など。再試行の判断ができるようそのまま投げる。
+                throw;
             }
             catch (IOException iex)
             {
@@ -625,21 +689,22 @@ namespace Tau
             }
             finally
             {
-                current = null;
+                currentCts = null;
+                try { cts.Dispose(); } catch { }
             }
 
-            List<object> toolCalls = new List<object>();
+            List<object> toolCalls = new();
             List<int> idxs = new List<int>(acc.Keys);
             idxs.Sort();
             foreach (int ix in idxs)
             {
-                StreamAcc c = acc[ix];
-                if (c.Name.Length == 0) continue;
-                Dictionary<string, object> fn = new Dictionary<string, object>();
-                fn["name"] = c.Name;
-                fn["arguments"] = c.Args.ToString();
-                Dictionary<string, object> call = new Dictionary<string, object>();
-                call["id"] = c.Id.Length > 0 ? c.Id : "call_" + ix;
+                StreamAcc sa = acc[ix];
+                if (sa.Name.Length == 0) continue;
+                Dictionary<string, object> fn = new();
+                fn["name"] = sa.Name;
+                fn["arguments"] = sa.Args.ToString();
+                Dictionary<string, object> call = new();
+                call["id"] = sa.Id.Length > 0 ? sa.Id : "call_" + ix;
                 call["type"] = "function";
                 call["function"] = fn;
                 toolCalls.Add(call);

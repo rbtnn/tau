@@ -62,7 +62,7 @@ namespace Tau
 
         static Dictionary<string, object> ParseObject(string s, ref int i)
         {
-            Dictionary<string, object> d = new Dictionary<string, object>();
+            Dictionary<string, object> d = new();
             i++; // {
             SkipWs(s, ref i);
             if (i < s.Length && s[i] == '}')
@@ -91,7 +91,7 @@ namespace Tau
 
         static List<object> ParseArray(string s, ref int i)
         {
-            List<object> a = new List<object>();
+            List<object> a = new();
             i++; // [
             SkipWs(s, ref i);
             if (i < s.Length && s[i] == ']')
@@ -155,6 +155,10 @@ namespace Tau
             while (i < s.Length && (Char.IsDigit(s[i]) || s[i] == '.' || s[i] == 'e' ||
                                     s[i] == 'E' || s[i] == '-' || s[i] == '+')) i++;
             string t = s.Substring(start, i - start);
+            // 数字が 1 文字も無い場合は不正な JSON。
+            // 黙って 0 を返すと、壊れた応答を正常扱いしてしまう。
+            if (t.Length == 0)
+                throw new Exception("invalid JSON number at position " + start);
             int n;
             if (int.TryParse(t, System.Globalization.NumberStyles.Integer,
                              System.Globalization.CultureInfo.InvariantCulture, out n))

@@ -2,6 +2,10 @@
 tau-web.exe
 *.exe
 output/
+bin/
+obj/
+*.pdb
+*.user
 
 # 秘密情報・ローカル設定（コミット禁止）
 .env

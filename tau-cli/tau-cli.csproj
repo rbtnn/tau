@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>tau</AssemblyName>
+    <RootNamespace>Tau</RootNamespace>
+
+    <!-- C# の言語バージョンは既定 (.NET 10 なら C# 14) を使う -->
+    <LangVersion>latest</LangVersion>
+
+    <!-- ソースは src/ 配下 -->
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+
+    <!-- カルチャ非依存で動かす(ICU の無い環境でも起動できる) -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- 単一ファイルで配布する -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifiers>win-x64;win-arm64;linux-x64;linux-arm64;osx-x64;osx-arm64</RuntimeIdentifiers>
+
+    <!-- 圧縮してサイズを抑える -->
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+
+    <!-- バージョン情報 -->
+    <Version>1.0.0</Version>
+    <Authors>rbtnn</Authors>
+    <Description>tau-cli - a console AI agent</Description>
+
+    <!-- 警告をエラーにしない(移行中は警告を許容する) -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CS0162;CS0219</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="src/**/*.cs" />
+  </ItemGroup>
+
+</Project>

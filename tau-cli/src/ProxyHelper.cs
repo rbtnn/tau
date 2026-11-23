@@ -12,6 +12,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
+using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -20,7 +21,8 @@ namespace Tau
 {
     static class ProxyHelper
     {
-        public static void Apply(HttpWebRequest request, Config cfg)
+        // HttpClient のハンドラにプロキシ設定を反映する。
+        public static void ApplyHttp(SocketsHttpHandler handler, Config cfg)
         {
             if (cfg.ProxyUrl != null && cfg.ProxyUrl.Trim().Length > 0)
             {
@@ -30,13 +32,17 @@ namespace Tau
                 else if (cfg.ProxyPass != null && cfg.ProxyPass.Length > 0)
                     p.Credentials = new NetworkCredential("", cfg.ProxyPass);
                 else
-                    p.UseDefaultCredentials = true; // 社内(Windows統合認証)プロキシ向け
-                request.Proxy = p;
+                    p.UseDefaultCredentials = true;   // 社内(Windows 統合認証)プロキシ向け
+
+                handler.Proxy = p;
+                handler.UseProxy = true;
             }
             else if (!cfg.UseSystemProxy)
             {
-                request.Proxy = null; // 直接接続(システムプロキシを無視)
+                // 直接接続(システムプロキシを無視)
+                handler.UseProxy = false;
             }
+            // UseSystemProxy が true なら既定のシステムプロキシが使われる
         }
     }
 

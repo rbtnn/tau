@@ -1550,6 +1550,38 @@ def main():
     else:
         bad("--test に健全性チェックがありません")
 
+    # ---- 6r. JSON パーサ / シリアライザ ----
+    if "static void JsonTest()" in tls_src:
+        ok("--test に JSON のテストがあります")
+    else:
+        bad("--test に JSON のテストがありません")
+    o = run_tau("", args=["--test=offline"])
+    if "7. JSON parser / serializer" in o:
+        ok("--test が JSON セクションを実行します")
+    else:
+        bad("--test に JSON セクションがありません")
+    # JSON セクションが全項目 OK であること
+    json_block = o[o.find("7. JSON parser / serializer"):]
+    if "8. Ctrl-C handling" in json_block:
+        json_block = json_block[:json_block.find("8. Ctrl-C handling")]
+    if "[NG]" not in json_block:
+        ok("JSON のテストがすべて通ります")
+    else:
+        bad("JSON のテストに失敗があります: " + json_block[:600])
+    # 主要な項目が含まれること
+    for label in ("parses an integer", "parses null", "parses an array",
+                  "parses an object", "parses raw Japanese text",
+                  "serialises a string", "keeps Japanese text unescaped",
+                  "parse -> serialise -> parse is stable",
+                  "parses an OpenAI chat.completion response",
+                  "parses a tool_call and its nested arguments JSON",
+                  "throws on a missing value"):
+        if label in json_block:
+            pass
+        else:
+            bad("JSON テストに欠けている項目: " + label)
+    ok("JSON テストの主要項目がそろっています")
+
     # ---- 7. TLS 設定 ----
     # .NET Framework 4.7 未満では既定が TLS 1.0 相当になり、
     # TLS 1.2 以上を要求する API で

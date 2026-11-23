@@ -12,6 +12,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
+using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -63,7 +64,7 @@ namespace Tau
             Dictionary<string, object> args = null;
             try { args = Json.Parse(argsJson) as Dictionary<string, object>; }
             catch { }
-            if (args == null) args = new Dictionary<string, object>();
+            if (args == null) args = new();
 
             if (args.ContainsKey("cmd")) return "shell";
             if (args.ContainsKey("content") && args.ContainsKey("path")) return "write_file";
@@ -77,7 +78,7 @@ namespace Tau
             Dictionary<string, object> args = null;
             try { args = Json.Parse(argsJson) as Dictionary<string, object>; }
             catch { }
-            if (args == null) args = new Dictionary<string, object>();
+            if (args == null) args = new();
 
             if (name == null || name.Trim().Length == 0) name = InferName(null, argsJson);
             name = NormalizeName(name);
@@ -108,16 +109,16 @@ namespace Tau
         static Dictionary<string, object> Func(string name, string desc,
                                                string[] required, string[][] props)
         {
-            Dictionary<string, object> f = new Dictionary<string, object>();
+            Dictionary<string, object> f = new();
             f["name"] = name;
             f["description"] = desc;
 
-            Dictionary<string, object> params_ = new Dictionary<string, object>();
+            Dictionary<string, object> params_ = new();
             params_["type"] = "object";
-            Dictionary<string, object> p = new Dictionary<string, object>();
+            Dictionary<string, object> p = new();
             for (int i = 0; i < props.Length; i++)
             {
-                Dictionary<string, object> d = new Dictionary<string, object>();
+                Dictionary<string, object> d = new();
                 d["type"] = props[i][1];
                 d["description"] = props[i][2];
                 p[props[i][0]] = d;
@@ -126,7 +127,7 @@ namespace Tau
             params_["required"] = new List<object>(required);
             f["parameters"] = params_;
 
-            Dictionary<string, object> tool = new Dictionary<string, object>();
+            Dictionary<string, object> tool = new();
             tool["type"] = "function";
             tool["function"] = f;
             return tool;
@@ -134,7 +135,7 @@ namespace Tau
 
         public static List<object> Definitions()
         {
-            List<object> tools = new List<object>();
+            List<object> tools = new();
 
             tools.Add(Func("shell",
                 "Run a command on the local machine. "
@@ -212,7 +213,7 @@ namespace Tau
                 }
                 p.WaitForExit();
 
-                Dictionary<string, object> d = new Dictionary<string, object>();
+                Dictionary<string, object> d = new();
                 d["ok"] = true;
                 d["exitCode"] = p.ExitCode;
                 d["stdout"] = Clip(DecodeBytes(so.Result));
@@ -231,7 +232,7 @@ namespace Tau
             try
             {
                 if (!File.Exists(path)) return Err("file does not exist: " + path);
-                Dictionary<string, object> d = new Dictionary<string, object>();
+                Dictionary<string, object> d = new();
                 d["ok"] = true;
                 d["content"] = Clip(DecodeBytes(File.ReadAllBytes(path)));
                 return Json.ToString(d);
@@ -251,7 +252,7 @@ namespace Tau
                 if (dir != null && dir.Length > 0 && !Directory.Exists(dir))
                     Directory.CreateDirectory(dir);
                 File.WriteAllText(path, content == null ? "" : content, Encoding.UTF8);
-                Dictionary<string, object> d = new Dictionary<string, object>();
+                Dictionary<string, object> d = new();
                 d["ok"] = true;
                 d["written"] = (content == null ? "" : content).Length;
                 d["path"] = Path.GetFullPath(path);
@@ -270,14 +271,14 @@ namespace Tau
             try
             {
                 StringBuilder list = new StringBuilder();
-                List<object> entries = new List<object>();
+                List<object> entries = new();
 
                 string[] dirs = Directory.GetDirectories(path);
                 foreach (string den in dirs)
                 {
                     string name = Path.GetFileName(den);
                     list.Append("[DIR ]  ").Append(name).Append("/\n");
-                    Dictionary<string, object> e = new Dictionary<string, object>();
+                    Dictionary<string, object> e = new();
                     e["type"] = "dir"; e["name"] = name; e["path"] = den;
                     entries.Add(e);
                 }
@@ -288,12 +289,12 @@ namespace Tau
                     string name = Path.GetFileName(f);
                     long size = new FileInfo(f).Length;
                     list.Append("[FILE]  ").Append(name).Append("  ").Append(HumanSize(size)).Append("\n");
-                    Dictionary<string, object> e = new Dictionary<string, object>();
+                    Dictionary<string, object> e = new();
                     e["type"] = "file"; e["name"] = name; e["size"] = size; e["path"] = f;
                     entries.Add(e);
                 }
 
-                Dictionary<string, object> d = new Dictionary<string, object>();
+                Dictionary<string, object> d = new();
                 d["ok"] = true;
                 d["path"] = Path.GetFullPath(path);
                 d["total"] = dirs.Length + files.Length;
@@ -324,60 +325,63 @@ namespace Tau
 
             try
             {
-                HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url.Trim());
                 LlmClient.ApplyTls();   // HTTPS 先でも TLS 1.2 以上を使えるようにする
-                ProxyHelper.Apply(request, cfg);
-                request.Method = method;
-                request.Timeout = cfg.ToolTimeoutSec * 1000;
-                request.ReadWriteTimeout = cfg.ToolTimeoutSec * 1000;
 
-                Dictionary<string, object> headers = headersObj as Dictionary<string, object>;
-                if (headers != null)
+                SocketsHttpHandler handler = new SocketsHttpHandler();
+                handler.AllowAutoRedirect = false;
+                ProxyHelper.ApplyHttp(handler, cfg);
+
+                using (HttpClient client = new HttpClient(handler))
                 {
-                    foreach (KeyValuePair<string, object> kv in headers)
+                    client.Timeout = TimeSpan.FromSeconds(cfg.ToolTimeoutSec);
+
+                    using (HttpRequestMessage req =
+                           new HttpRequestMessage(new HttpMethod(method), url.Trim()))
                     {
-                        string v = Json.AsString(kv.Value);
-                        if (String.Equals(kv.Key, "Content-Type", StringComparison.OrdinalIgnoreCase)) request.ContentType = v;
-                        else if (String.Equals(kv.Key, "Accept", StringComparison.OrdinalIgnoreCase)) request.Accept = v;
-                        else if (String.Equals(kv.Key, "User-Agent", StringComparison.OrdinalIgnoreCase)) request.UserAgent = v;
-                        else request.Headers[kv.Key] = v;
+                        Dictionary<string, object> headers = headersObj as Dictionary<string, object>;
+                        if (headers != null)
+                        {
+                            foreach (KeyValuePair<string, object> kv in headers)
+                            {
+                                string v = Json.AsString(kv.Value);
+                                // Content-Type はコンテンツ側のヘッダ
+                                if (String.Equals(kv.Key, "Content-Type", StringComparison.OrdinalIgnoreCase))
+                                    continue;
+                                req.Headers.TryAddWithoutValidation(kv.Key, v);
+                            }
+                        }
+
+                        if (body != null && body.Length > 0)
+                        {
+                            byte[] data = Encoding.UTF8.GetBytes(body);
+                            req.Content = new ByteArrayContent(data);
+
+                            string ctype = "application/json";
+                            if (headers != null)
+                            {
+                                foreach (KeyValuePair<string, object> kv in headers)
+                                    if (String.Equals(kv.Key, "Content-Type", StringComparison.OrdinalIgnoreCase))
+                                        ctype = Json.AsString(kv.Value);
+                            }
+                            req.Content.Headers.ContentType =
+                                System.Net.Http.Headers.MediaTypeHeaderValue.Parse(ctype);
+                        }
+
+                        using (HttpResponseMessage resp = client.Send(req,
+                            HttpCompletionOption.ResponseContentRead))
+                        {
+                            byte[] raw = resp.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult();
+                            string respBody = DecodeBytes(raw);
+
+                            Dictionary<string, object> d = new();
+                            d["ok"] = true;
+                            d["status"] = (int)resp.StatusCode;
+                            d["url"] = url.Trim();
+                            d["body"] = Clip(respBody);
+                            return Json.ToString(d);
+                        }
                     }
                 }
-
-                if (body != null && body.Length > 0)
-                {
-                    if (request.ContentType == null) request.ContentType = "application/json";
-                    byte[] data = Encoding.UTF8.GetBytes(body);
-                    request.ContentLength = data.Length;
-                    using (Stream s = request.GetRequestStream())
-                        s.Write(data, 0, data.Length);
-                }
-
-                HttpStatusCode status;
-                string respBody;
-                try
-                {
-                    using (HttpWebResponse resp = (HttpWebResponse)request.GetResponse())
-                    {
-                        status = resp.StatusCode;
-                        using (Stream rs = resp.GetResponseStream())
-                            respBody = DecodeBytes(ReadAllBytes(rs));
-                    }
-                }
-                catch (WebException wex)
-                {
-                    if (wex.Response == null) return Err("curl request error: " + wex.Message);
-                    using (Stream rs = wex.Response.GetResponseStream())
-                        respBody = DecodeBytes(ReadAllBytes(rs));
-                    status = ((HttpWebResponse)wex.Response).StatusCode;
-                }
-
-                Dictionary<string, object> d = new Dictionary<string, object>();
-                d["ok"] = true;
-                d["status"] = (int)status;
-                d["url"] = url.Trim();
-                d["body"] = Clip(respBody);
-                return Json.ToString(d);
             }
             catch (Exception ex)
             {
@@ -423,7 +427,7 @@ namespace Tau
 
         static System.Threading.Tasks.Task<byte[]> CopyToBytesAsync(Stream s)
         {
-            return System.Threading.Tasks.Task.Run(delegate()
+            return System.Threading.Tasks.Task.Run(() =>
             {
                 using (MemoryStream ms = new MemoryStream())
                 {
@@ -451,7 +455,7 @@ namespace Tau
 
         static string Err(string message)
         {
-            Dictionary<string, object> d = new Dictionary<string, object>();
+            Dictionary<string, object> d = new();
             d["error"] = message;
             return Json.ToString(d);
         }

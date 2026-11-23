@@ -490,14 +490,47 @@ tau.exe --test=offline    … ネットワークを使わずに確認（CI 向�
 | 4 | buffer limit | 254 文字の壁がないか（パイプ入力時は実際に 600 文字を読む） |
 | 5 | clipboard | 読み取りと往復 |
 | 6 | markdown | 表示幅（実測）・記号除去・罫線 |
-| 7 | Ctrl-C | ハンドラ登録 |
-| 8 | session store | 日本語を含む保存・読み込み・削除 |
-| 9 | config file | 未知キーの保持・`models` の除去 |
-| 10 | TLS | TLS 1.2 が適用されているか |
-| **11** | **LLM API** | **非ストリーミングとストリーミングの実リクエスト** |
-| 12 | interactive input | 実際に 1 行入力して何が届くか（任意） |
+| **7** | **JSON** | **パース・シリアライズ・往復・OpenAI 形式の解釈** |
+| 8 | Ctrl-C | ハンドラ登録 |
+| 9 | session store | 日本語を含む保存・読み込み・削除 |
+| 10 | config file | 未知キーの保持・`models` の除去 |
+| 11 | TLS | TLS 1.2 が適用されているか |
+| **12** | **LLM API** | **非ストリーミングとストリーミングの実リクエスト** |
+| 13 | interactive input | 実際に 1 行入力して何が届くか（任意） |
 
-#### 11. LLM API リクエスト
+#### 7. JSON
+
+`Json` は外部ライブラリを使わない自前のパーサ／シリアライザです。
+壊れると API 応答の解釈がすべて狂うため、単体で重点的に検証します。
+
+```
+  7. JSON parser / serializer
+  [OK] parses an integer
+  [OK] parses null
+  [OK] parses an escaped quote
+  [OK] parses a \uXXXX escape
+  [OK] parses raw Japanese text
+  [OK] parses an array
+  [OK] parses deeply nested structures
+  [OK] throws on a missing value
+  [OK] serialises a string
+  [OK] escapes a backslash
+  [OK] keeps Japanese text unescaped
+  [OK] parse -> serialise -> parse is stable
+  [OK] parses an OpenAI chat.completion response
+  [OK] parses a tool_call and its nested arguments JSON
+```
+
+| 分類 | 内容 |
+|---|---|
+| パース | 整数・負数・小数・真偽・null・文字列・配列・オブジェクト・ネスト・空白 |
+| エスケープ | `\"` `\n` `\t` `\\` `\uXXXX`・生の日本語 |
+| 不正入力 | 値の欠落・未終端の配列・空入力・コロン欠落 → **例外** |
+| シリアライズ | 各型・エスケープ・日本語をそのまま保持 |
+| 往復 | `parse → ToString → parse` で結果が変わらないこと |
+| 実データ | OpenAI の `chat.completion` 応答・`tool_calls` の `arguments` JSON |
+
+#### 12. LLM API リクエスト
 
 `tau.json`（または環境変数）の設定で、実際に API を呼びます。
 

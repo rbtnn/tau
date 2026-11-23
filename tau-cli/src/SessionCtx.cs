@@ -25,7 +25,7 @@ namespace Tau
         public string Summary = "";
         public int ContextStart = 0;
         public int LastTotalTokens = 0;   // 直前の API 応答 usage.total_tokens
-        public List<object> Messages = new List<object>();
+        public List<object> Messages = new();
     }
 
     // =======================================================================

@@ -33,7 +33,7 @@ namespace Tau
 
         static Dictionary<string, object> Msg(string role, string content)
         {
-            Dictionary<string, object> m = new Dictionary<string, object>();
+            Dictionary<string, object> m = new();
             m["role"] = role;
             m["content"] = content;
             m["ts"] = DateTime.Now.ToString("yyyy/MM/dd HH:mm");
@@ -59,7 +59,7 @@ namespace Tau
 
         static Dictionary<string, object> ToolMsg(string id, string name, string result)
         {
-            Dictionary<string, object> m = new Dictionary<string, object>();
+            Dictionary<string, object> m = new();
             m["role"] = "tool";
             m["tool_call_id"] = id;
             m["name"] = name;
@@ -69,7 +69,7 @@ namespace Tau
 
         static Dictionary<string, object> AsstWithToolCalls(LlmResp resp)
         {
-            Dictionary<string, object> asst = new Dictionary<string, object>();
+            Dictionary<string, object> asst = new();
             asst["role"] = "assistant";
             if (resp.Content != null && resp.Content.Length > 0) asst["content"] = resp.Content;
             asst["tool_calls"] = resp.ToolCalls;
@@ -136,7 +136,7 @@ namespace Tau
 
         static List<object> BuildEffectiveMessages(Config cfg, SessionCtx ctx)
         {
-            List<object> eff = new List<object>();
+            List<object> eff = new();
             eff.Add(Msg("system", ComposeSystem(cfg.SystemPrompt, ctx.Summary)));
             if (ctx.ContextStart < 0) ctx.ContextStart = 0;
             for (int i = ctx.ContextStart; i < ctx.Messages.Count; i++)
@@ -210,7 +210,7 @@ namespace Tau
         {
             try
             {
-                List<object> body = new List<object>();
+                List<object> body = new();
                 body.Add(Msg("system",
                     "You are an assistant that specialises in summarising chat history."
                     + " Produce a concise bullet-point summary that can be reused later as context,"
@@ -277,7 +277,7 @@ namespace Tau
                                 Func<bool> cancelled)
         {
             ctx.Messages.Add(Msg("user", userMessage));
-            List<object> turnSteps = new List<object>();
+            List<object> turnSteps = new();
             StringBuilder turnThink = new StringBuilder();
 
             MaybeCompact(cfg, ctx);
@@ -298,8 +298,8 @@ namespace Tau
                     try
                     {
                         resp = LlmClient.CallStream(cfg, eff, cfg.AllowTools,
-                            delegate (string d) { if (onContent != null) onContent(d); },
-                            delegate (string d) { turnThink.Append(d); if (onReasoning != null) onReasoning(d); });
+                            (d) => { if (onContent != null) onContent(d); },
+                            (d) => { turnThink.Append(d); if (onReasoning != null) onReasoning(d); });
                     }
                     catch (LlmCancelledException)
                     {

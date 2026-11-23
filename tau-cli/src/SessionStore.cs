@@ -84,7 +84,7 @@ namespace Tau
             Dictionary<string, object> meta = Load(id);
             if (meta != null && meta.ContainsKey("messages") && meta["messages"] is List<object>)
                 return (List<object>)meta["messages"];
-            return new List<object>();
+            return new();
         }
 
         public void Save(string id, List<object> messages, string title)
@@ -99,21 +99,21 @@ namespace Tau
                 ? Json.AsString(meta["createdAt"]) : "";
             if (createdAt.Length == 0) createdAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm");
 
-            Dictionary<string, object> s = new Dictionary<string, object>();
+            Dictionary<string, object> s = new();
             s["id"] = Sanitize(id);
             s["title"] = (title == null || title.Trim().Length == 0) ? "New conversation" : title;
             s["createdAt"] = createdAt;
             s["updatedAt"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm");
             s["summary"] = (summary == null || summary.Trim().Length == 0) ? "" : summary;
             s["contextStart"] = (contextStart < 0) ? 0 : contextStart;
-            s["messages"] = (messages == null) ? new List<object>() : messages;
+            s["messages"] = (messages == null) ? new() : messages;
             try { File.WriteAllText(FileOf(id), Json.ToString(s), Encoding.UTF8); }
             catch (Exception ex) { Console.WriteLine("[session] failed to save: " + ex.Message); }
         }
 
         public List<object> List()
         {
-            List<object> list = new List<object>();
+            List<object> list = new();
             try
             {
                 string[] files = Directory.GetFiles(sessionsDir, "*.json");
@@ -180,12 +180,12 @@ namespace Tau
             try
             {
                 string f = StateFile();
-                if (!File.Exists(f)) return new Dictionary<string, object>();
+                if (!File.Exists(f)) return new();
                 object o = Json.Parse(File.ReadAllText(f, Encoding.UTF8));
                 Dictionary<string, object> st = o as Dictionary<string, object>;
-                return st ?? new Dictionary<string, object>();
+                return st ?? new();
             }
-            catch { return new Dictionary<string, object>(); }
+            catch { return new(); }
         }
 
         void SaveState(Dictionary<string, object> st)

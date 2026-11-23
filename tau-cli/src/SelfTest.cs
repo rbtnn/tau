@@ -96,6 +96,7 @@ namespace Tau
             BufferLimits();
             Clipboard();
             Markdown();
+            JsonTest();
             CtrlC();
             Sessions();
             ConfigFile(cfg);
@@ -561,17 +562,283 @@ namespace Tau
                 "table markup is not printed verbatim", null);
         }
 
-        // ---------------- 7. Ctrl-C ----------------
+        // ---------------- 7. JSON ----------------
+
+        static void JsonTest()
+        {
+            Section("7. JSON parser / serializer");
+
+            // ---- パース: 基本型 ----
+            object o;
+
+            o = Json.Parse("123");
+            Check(Json.AsInt(o) == 123, "parses an integer", "got " + Json.AsString(o));
+
+            o = Json.Parse("-42");
+            Check(Json.AsInt(o) == -42, "parses a negative integer", "got " + Json.AsString(o));
+
+            o = Json.Parse("3.5");
+            Check(Json.AsString(o) == "3.5", "parses a decimal", "got " + Json.AsString(o));
+
+            o = Json.Parse("true");
+            Check(Json.AsString(o) == "true", "parses true", "got " + Json.AsString(o));
+
+            o = Json.Parse("false");
+            Check(Json.AsString(o) == "false", "parses false", "got " + Json.AsString(o));
+
+            o = Json.Parse("null");
+            Check(o == null, "parses null", "got " + (o == null ? "null" : o.GetType().Name));
+
+            o = Json.Parse("\"hello\"");
+            Check(Json.AsString(o) == "hello", "parses a string", "got " + Json.AsString(o));
+
+            // ---- パース: エスケープ ----
+            o = Json.Parse("\"a\\\"b\"");
+            Check(Json.AsString(o) == "a\"b", "parses an escaped quote", "got " + Json.AsString(o));
+
+            o = Json.Parse("\"line1\\nline2\"");
+            Check(Json.AsString(o).IndexOf('\n') >= 0, "parses backslash-n", "got " + Json.AsString(o));
+
+            o = Json.Parse("\"tab\\there\"");
+            Check(Json.AsString(o).IndexOf('\t') >= 0, "parses backslash-t", "got " + Json.AsString(o));
+
+            o = Json.Parse("\"back\\\\slash\"");
+            Check(Json.AsString(o) == "back\\slash", "parses a doubled backslash",
+                "got " + Json.AsString(o));
+
+            // Unicode エスケープ
+            o = Json.Parse("\"\\u3042\"");
+            Check(Json.AsString(o) == "あ", "parses a \\uXXXX escape", "got " + Json.AsString(o));
+
+            // 日本語(生の UTF-8 文字列)
+            o = Json.Parse("\"日本語のテスト\"");
+            Check(Json.AsString(o) == "日本語のテスト",
+                "parses raw Japanese text", "got " + Json.AsString(o));
+
+            // ---- パース: 配列 ----
+            o = Json.Parse("[1,2,3]");
+            List<object> arr = o as List<object>;
+            Check(arr != null && arr.Count == 3, "parses an array",
+                arr == null ? "not a list" : (arr.Count + " items"));
+            if (arr != null && arr.Count == 3)
+                Check(Json.AsInt(arr[1]) == 2, "reads an array element",
+                    "got " + Json.AsString(arr[1]));
+
+            o = Json.Parse("[]");
+            arr = o as List<object>;
+            Check(arr != null && arr.Count == 0, "parses an empty array", null);
+
+            // ---- パース: オブジェクト ----
+            o = Json.Parse("{\"a\":1,\"b\":\"x\"}");
+            Dictionary<string, object> dict = o as Dictionary<string, object>;
+            Check(dict != null && dict.Count == 2, "parses an object",
+                dict == null ? "not a dict" : (dict.Count + " keys"));
+            if (dict != null)
+            {
+                Check(Json.AsInt(dict["a"]) == 1, "reads a number member",
+                    "got " + Json.AsString(dict["a"]));
+                Check(Json.AsString(dict["b"]) == "x", "reads a string member",
+                    "got " + Json.AsString(dict["b"]));
+            }
+
+            o = Json.Parse("{}");
+            dict = o as Dictionary<string, object>;
+            Check(dict != null && dict.Count == 0, "parses an empty object", null);
+
+            // ---- パース: ネスト ----
+            o = Json.Parse("{\"a\":{\"b\":[1,{\"c\":2}]}}");
+            dict = o as Dictionary<string, object>;
+            bool nested = false;
+            if (dict != null && dict.ContainsKey("a"))
+            {
+                Dictionary<string, object> a = dict["a"] as Dictionary<string, object>;
+                if (a != null && a.ContainsKey("b"))
+                {
+                    List<object> b = a["b"] as List<object>;
+                    if (b != null && b.Count == 2)
+                    {
+                        Dictionary<string, object> c = b[1] as Dictionary<string, object>;
+                        if (c != null && Json.AsInt(c["c"]) == 2) nested = true;
+                    }
+                }
+            }
+            Check(nested, "parses deeply nested structures", "nested lookup failed");
+
+            // ---- パース: 空白 ----
+            o = Json.Parse("  { \t\"a\" : 1 , \n \"b\" : [ 2 ] }  ");
+            dict = o as Dictionary<string, object>;
+            Check(dict != null && dict.Count == 2, "ignores whitespace", null);
+
+            // ---- パース: 不正な入力は例外 ----
+            CheckThrows("{\"a\":}", "throws on a missing value");
+            CheckThrows("[1,", "throws on an unterminated array");
+            CheckThrows("", "throws on empty input");
+            CheckThrows("{\"a\" 1}", "throws on a missing colon");
+
+            // ---- シリアライズ: 基本型 ----
+            Check(Json.ToString(null) == "null", "serialises null",
+                "got " + Json.ToString(null));
+
+            Check(Json.ToString(true) == "true", "serialises true",
+                "got " + Json.ToString(true));
+
+            Check(Json.ToString(42) == "42", "serialises an integer",
+                "got " + Json.ToString(42));
+
+            Check(Json.ToString("hi") == "\"hi\"", "serialises a string",
+                "got " + Json.ToString("hi"));
+
+            // ---- シリアライズ: エスケープ ----
+            string esc = Json.ToString("a\"b");
+            Check(esc == "\"a\\\"b\"", "escapes a quote", "got " + esc);
+
+            esc = Json.ToString("line1\nline2");
+            Check(esc.IndexOf("\\n") >= 0, "escapes a newline", "got " + esc);
+
+            esc = Json.ToString("tab\there");
+            Check(esc.IndexOf("\\t") >= 0, "escapes a tab", "got " + esc);
+
+            esc = Json.ToString("back\\slash");
+            Check(esc.IndexOf("\\\\") >= 0, "escapes a backslash", "got " + esc);
+
+            // ---- シリアライズ: 日本語 ----
+            string jp = Json.ToString("日本語のテスト");
+            Check(jp.IndexOf("日本語のテスト") >= 0,
+                "keeps Japanese text unescaped", "got " + jp);
+
+            // ---- 往復 ----
+            string[] roundTrip =
+            {
+                "\"plain\"",
+                "\"日本語\"",
+                "[1,2,3]",
+                "{\"a\":1,\"b\":\"x\",\"c\":[true,null]}",
+                "{\"nested\":{\"deep\":{\"value\":42}}}",
+            };
+            int rtFail = 0;
+            string rtWhy = null;
+            for (int i = 0; i < roundTrip.Length; i++)
+            {
+                try
+                {
+                    object first = Json.Parse(roundTrip[i]);
+                    string text = Json.ToString(first);
+                    object second = Json.Parse(text);
+                    string text2 = Json.ToString(second);
+                    if (text != text2)
+                    {
+                        rtFail++;
+                        if (rtWhy == null)
+                            rtWhy = roundTrip[i] + " -> " + text + " -> " + text2;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    rtFail++;
+                    if (rtWhy == null) rtWhy = roundTrip[i] + ": " + ex.Message;
+                }
+            }
+            Check(rtFail == 0, "parse -> serialise -> parse is stable",
+                rtFail > 0 ? rtWhy : null);
+
+            // ---- AsString / AsInt の変換 ----
+            Check(Json.AsString(null) == "", "AsString(null) is empty", null);
+            Check(Json.AsString(1) == "1", "AsString(int) gives a string",
+                "got " + Json.AsString(1));
+            Check(Json.AsString(true) == "true", "AsString(bool) gives \"true\"",
+                "got " + Json.AsString(true));
+            Check(Json.AsInt(null) == 0, "AsInt(null) is 0", null);
+            Check(Json.AsInt("12") == 12, "AsInt on a numeric string",
+                "got " + Json.AsInt("12"));
+            Check(Json.AsInt("abc") == 0, "AsInt on a non-numeric string is 0",
+                "got " + Json.AsInt("abc"));
+
+            // ---- OpenAI 形式の応答を実際に解釈できるか ----
+            string sample =
+                "{\"id\":\"chatcmpl-1\",\"object\":\"chat.completion\"," +
+                "\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\"," +
+                "\"content\":\"こんにちは\"},\"finish_reason\":\"stop\"}]," +
+                "\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5," +
+                "\"total_tokens\":15}}";
+            bool openAiOk = false;
+            string openAiWhy = null;
+            try
+            {
+                Dictionary<string, object> root =
+                    Json.Parse(sample) as Dictionary<string, object>;
+                if (root != null && root.ContainsKey("choices"))
+                {
+                    List<object> choices = root["choices"] as List<object>;
+                    if (choices != null && choices.Count > 0)
+                    {
+                        Dictionary<string, object> first =
+                            choices[0] as Dictionary<string, object>;
+                        Dictionary<string, object> msg =
+                            first["message"] as Dictionary<string, object>;
+                        string content = Json.AsString(msg["content"]);
+                        Dictionary<string, object> usage =
+                            root["usage"] as Dictionary<string, object>;
+                        int total = Json.AsInt(usage["total_tokens"]);
+                        openAiOk = (content == "こんにちは" && total == 15);
+                        if (!openAiOk)
+                            openAiWhy = "content=" + content + " total=" + total;
+                    }
+                }
+            }
+            catch (Exception ex) { openAiWhy = ex.Message; }
+            Check(openAiOk, "parses an OpenAI chat.completion response", openAiWhy);
+
+            // ---- ツール呼び出し(arguments が JSON 文字列)の往復 ----
+            string toolSample =
+                "{\"choices\":[{\"message\":{\"role\":\"assistant\"," +
+                "\"tool_calls\":[{\"id\":\"call_0\",\"type\":\"function\"," +
+                "\"function\":{\"name\":\"read_file\"," +
+                "\"arguments\":\"{\\\"path\\\":\\\"a.txt\\\"}\"}}]}}]}";
+            bool toolOk = false;
+            string toolWhy = null;
+            try
+            {
+                Dictionary<string, object> root =
+                    Json.Parse(toolSample) as Dictionary<string, object>;
+                List<object> choices = root["choices"] as List<object>;
+                Dictionary<string, object> first =
+                    choices[0] as Dictionary<string, object>;
+                Dictionary<string, object> message =
+                    first["message"] as Dictionary<string, object>;
+                List<object> calls = message["tool_calls"] as List<object>;
+                Dictionary<string, object> call = calls[0] as Dictionary<string, object>;
+                Dictionary<string, object> fn = call["function"] as Dictionary<string, object>;
+                string name = Json.AsString(fn["name"]);
+                string argsJson = Json.AsString(fn["arguments"]);
+                Dictionary<string, object> args =
+                    Json.Parse(argsJson) as Dictionary<string, object>;
+                string path = Json.AsString(args["path"]);
+                toolOk = (name == "read_file" && path == "a.txt");
+                if (!toolOk) toolWhy = "name=" + name + " path=" + path;
+            }
+            catch (Exception ex) { toolWhy = ex.Message; }
+            Check(toolOk, "parses a tool_call and its nested arguments JSON", toolWhy);
+        }
+
+        // 例外が出ることを確認する
+        static void CheckThrows(string json, string msg)
+        {
+            bool threw = false;
+            try { Json.Parse(json); }
+            catch { threw = true; }
+            Check(threw, msg, threw ? null : "no exception for: " + json);
+        }
+
+        // ---------------- 8. Ctrl-C ----------------
 
         static void CtrlC()
         {
-            Section("7. Ctrl-C handling");
+            Section("8. Ctrl-C handling");
 
             bool registered = false;
             try
             {
-                ConsoleCancelEventHandler h = delegate (object s, ConsoleCancelEventArgs e)
-                {
+                ConsoleCancelEventHandler h = (s, e) => {
                     e.Cancel = true;
                 };
                 Console.CancelKeyPress += h;
@@ -586,11 +853,11 @@ namespace Tau
                 ConsoleUi.Dim("       (Ctrl-C cancels the current turn; it does not exit)\n");
         }
 
-        // ---------------- 8. セッション ----------------
+        // ---------------- 9. セッション ----------------
 
         static void Sessions()
         {
-            Section("8. session store");
+            Section("9. session store");
 
             string tmp = null;
             try
@@ -612,7 +879,7 @@ namespace Tau
                 Check(id != null && id.Length > 0, "a session id is generated",
                     id == null ? "null" : null);
 
-                List<object> msgs = new List<object>();
+                List<object> msgs = new();
                 msgs.Add(Program.Msg("user", "日本語のテスト"));
                 msgs.Add(Program.Msg("assistant", "応答です"));
                 store.Save(id, msgs, "テスト");
@@ -657,11 +924,11 @@ namespace Tau
             }
         }
 
-        // ---------------- 9. 設定ファイル ----------------
+        // ---------------- 10. 設定ファイル ----------------
 
         static void ConfigFile(Config cfg)
         {
-            Section("9. config file");
+            Section("10. config file");
 
             string tmp = null;
             try
@@ -717,45 +984,44 @@ namespace Tau
             }
         }
 
-        // ---------------- 10. TLS ----------------
+        // ---------------- 11. TLS ----------------
 
         static void Tls(Config cfg)
         {
-            Section("10. TLS");
+            Section("11. TLS");
 
             string tls = LlmClient.CurrentTls;
             Console.WriteLine("    current: " + tls);
 
-            // 起動時に ApplyTls() が呼ばれ、Tls12 単独になっていること。
-            // Ssl3 や Tls(1.0) のままだと、現代のサーバでは接続が拒否される。
-            bool isTls12 = false;
+            // TLS 1.2 以上を使う設定になっていること。
+            // Ssl3 や TLS 1.0 だけだと、現代のサーバでは接続が拒否される。
+            bool hasTls12 = false;
             try
             {
-                isTls12 = (System.Net.ServicePointManager.SecurityProtocol
-                           == System.Net.SecurityProtocolType.Tls12);
+                System.Security.Authentication.SslProtocols p = LlmClient.PreferredTls;
+                hasTls12 = ((p & System.Security.Authentication.SslProtocols.Tls12) != 0);
             }
             catch { }
 
-            Check(isTls12, "TLS 1.2 is applied at startup (not Ssl3/Tls)",
-                isTls12 ? null
-                        : ("currently " + tls + " - Ssl3/Tls will be rejected by most servers"));
+            Check(hasTls12, "TLS 1.2 is enabled (not Ssl3/Tls only)",
+                hasTls12 ? null : ("currently " + tls));
 
-            // TLS 1.2 を明示的に設定できること
+            // ハンドラに TLS 設定を適用できること
             bool ok = true;
             string why = null;
             try
             {
-                System.Net.ServicePointManager.SecurityProtocol =
-                    System.Net.SecurityProtocolType.Tls12;
-                ok = (System.Net.ServicePointManager.SecurityProtocol
-                      == System.Net.SecurityProtocolType.Tls12);
+                System.Net.Http.SocketsHttpHandler h = new System.Net.Http.SocketsHttpHandler();
+                LlmClient.ApplyTlsTo(h);
+                ok = (h.SslOptions.EnabledSslProtocols
+                      & System.Security.Authentication.SslProtocols.Tls12) != 0;
             }
             catch (Exception ex)
             {
                 ok = false;
                 why = ex.GetType().Name + ": " + ex.Message;
             }
-            Check(ok, "TLS 1.2 can be selected explicitly", why);
+            Check(ok, "TLS settings can be applied to the HTTP handler", why);
 
             // エンドポイントの表示
             ConsoleUi.Dim("       endpoint: " + cfg.ApiBaseUrl + "\n");
@@ -772,11 +1038,11 @@ namespace Tau
             return cfg.ProxyUrl;
         }
 
-        // ---------------- 11. LLM API への実リクエスト ----------------
+        // ---------------- 12. LLM API への実リクエスト ----------------
 
         static void ApiRequest(Config cfg)
         {
-            Section("11. LLM API request (real HTTP)");
+            Section("12. LLM API request (real HTTP)");
 
             // 設定が揃っているか
             string url = cfg.ApiBaseUrl;
@@ -799,7 +1065,7 @@ namespace Tau
                 Skip("llmApiKey is not set (the server may still accept the request)");
 
             // 送るメッセージ(ごく短く、決定的な応答を期待する)
-            List<object> messages = new List<object>();
+            List<object> messages = new();
             messages.Add(Program.Msg("system",
                 "You are a connectivity test. Reply with exactly: OK"));
             messages.Add(Program.Msg("user", "ping"));
@@ -864,8 +1130,8 @@ namespace Tau
             try
             {
                 sresp = LlmClient.CallStream(cfg, messages, false,
-                    delegate (string d) { streamed.Append(d); chunks++; },
-                    delegate (string d) { });
+                    (d) => { streamed.Append(d); chunks++; },
+                    (d) => { });
             }
             catch (Exception ex)
             {
@@ -912,15 +1178,15 @@ namespace Tau
         static string DescribeError(Exception ex)
         {
             WebException wex = ex as WebException;
-            if (wex != null) return LlmClient.DescribeWebException(wex);
+            if (wex != null) return LlmClient.DescribeError(wex);
             return ex.GetType().Name + ": " + ex.Message;
         }
 
-        // ---------------- 12. 対話入力(任意) ----------------
+        // ---------------- 13. 対話入力(任意) ----------------
 
         static void InteractiveInput()
         {
-            Section("12. interactive input (manual)");
+            Section("13. interactive input (manual)");
 
             if (!Program.IsWindows())
             {
