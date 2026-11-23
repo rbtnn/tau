@@ -1071,6 +1071,18 @@ def main():
     else:
         bad("改行されず連結しています: %r" % mixed[:3])
 
+    # 進行状況 ("/ connecting..." "/ receiving...") と
+    # [thinking] / ▶ Tool / 本文が同じ行に連結していないこと。
+    # 進行状況は \r で上書きするので、消してから改行する必要がある。
+    progress_mixed = [l for l in lines
+                      if ("connecting..." in l or "receiving..." in l)
+                      and ("[thinking]" in l or "▶ Tool:" in l
+                           or "最終的な回答です。" in l)]
+    if not progress_mixed:
+        ok("進行状況の行に思考や本文が連結しません")
+    else:
+        bad("進行状況のあとに改行がありません: %r" % progress_mixed[:3])
+
     # 本文は "[thinking]" や "▶" の行に続けて書かれていないこと
     if reply_lines and ("[thinking]" not in reply_lines[0] and "▶" not in reply_lines[0]):
         ok("本文は単独の行から始まります")
@@ -1222,6 +1234,60 @@ def main():
         ok("/delete は存在しない番号を拒否します")
     else:
         bad("/delete の番号チェックがありません: " + out[-300:])
+
+    # ---- /open も番号で開けること (以前は ID のみだった) ----
+    out = run_tau("/sessions\n/exit\n")
+    open_ids = []
+    for line in out.splitlines():
+        mm = re.search(r"^\s*[* ]?\s*(\d+)\.\s+(\S+)", line)
+        if mm:
+            open_ids.append((int(mm.group(1)), mm.group(2)))
+    if len(open_ids) >= 2:
+        num, want_id = open_ids[1]
+        out = run_tau("/open %d\n/exit\n" % num)
+        if "Opened session: " + want_id in out:
+            ok("/open は番号(%d)でもセッションを開けます" % num)
+        else:
+            bad("/open が番号で開けません: num=%d want=%s out=%s"
+                % (num, want_id, out[-300:]))
+    else:
+        bad("/open の番号テストに必要なセッションが足りません")
+
+    # ID でも従来どおり開けること
+    out = run_tau("/sessions\n/exit\n")
+    sid2 = ""
+    for line in out.splitlines():
+        mm = re.search(r"^\s*[* ]?\s*(\d+)\.\s+(\S+)", line)
+        if mm:
+            sid2 = mm.group(2)
+            break
+    if sid2:
+        out = run_tau("/open " + sid2 + "\n/exit\n")
+        if "Opened session: " + sid2 in out:
+            ok("/open は ID でもセッションを開けます")
+        else:
+            bad("/open が ID で開けません: " + out[-300:])
+    else:
+        bad("/open の ID テスト用セッションがありません")
+
+    out = run_tau("/open 99\n/exit\n")
+    if "No session with that number" in out:
+        ok("/open は存在しない番号を拒否します")
+    else:
+        bad("/open の番号チェックがありません: " + out[-300:])
+
+    out = run_tau("/open\n/exit\n")
+    if "Specify the session to open" in out:
+        ok("/open を引数なしで実行すると使い方を表示します")
+    else:
+        bad("/open の引数チェックがありません")
+
+    # /help が両方とも n|id と案内していること
+    out = run_tau("/help\n/exit\n")
+    if "/open <n|id>" in out and "/delete <n|id>" in out:
+        ok("/help が /open と /delete の n|id 対応を案内します")
+    else:
+        bad("/help の案内が古いままです: " + out[-400:])
 
     # ---- 6g. /clear はセッションの内容をクリアする ----
     run_tau("/new\nclear-test\n/exit\n")   # 会話を 1 つ作る

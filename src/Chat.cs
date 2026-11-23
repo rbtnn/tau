@@ -271,11 +271,24 @@ namespace Tau
                     return true;
 
                 case "/open":
-                    if (arg.Length == 0) { ConsoleUi.Danger("Usage: /open <session id>\n"); return true; }
+                    if (arg.Length == 0)
                     {
-                        Dictionary<string, object> meta = store.Load(arg);
+                        ConsoleUi.Danger("Specify the session to open\n");
+                        ConsoleUi.Dim("  Usage: /open <number|id>   (numbers come from /sessions)\n");
+                        return true;
+                    }
+                    {
+                        // /delete と同じく、番号でも ID でも開けるようにする
+                        string openId = ResolveSessionId(arg);
+                        if (openId.Length == 0)
+                        {
+                            ConsoleUi.Danger("No session with that number: " + arg + "\n");
+                            ConsoleUi.Dim("  Check the numbers with /sessions\n");
+                            return true;
+                        }
+                        Dictionary<string, object> meta = store.Load(openId);
                         if (meta == null) { ConsoleUi.Danger("No such session: " + arg + "\n"); return true; }
-                        ctx = FromMeta(arg, meta);
+                        ctx = FromMeta(openId, meta);
                         store.SetLastSessionId(ctx.Id);
                         ConsoleUi.Info("Opened session: " + ctx.Id + "  (" + ctx.Title + ")");
                         PrintHistory(ctx);
@@ -384,7 +397,7 @@ namespace Tau
                     + id + "  " + title + "  (" + count + " msgs)");
             }
             Console.WriteLine();
-            ConsoleUi.Dim("  * = current session. Delete with /delete <number|id>\n");
+            ConsoleUi.Dim("  * = current session. Open with /open <number|id>, delete with /delete <number|id>\n");
         }
 
         // 番号(1 始まり)または ID からセッション ID を解決する
@@ -608,6 +621,9 @@ namespace Tau
                         // 本文はバッファする(Markdown として整形して表示するため)
                         if (kind != KIND_CONTENT)
                         {
+                            // 「/ connecting...」が残っていると同じ行に本文が
+                            // 続いてしまうので、必ず消してから改行する。
+                            ClearProgress();
                             if (kind != KIND_NONE) Console.WriteLine();
                             kind = KIND_CONTENT;
                         }
@@ -621,6 +637,9 @@ namespace Tau
                     {
                         if (kind != KIND_THINK)
                         {
+                            // 「/ connecting...」の行に [thinking] が
+                            // 続かないよう、まず進行状況を消す。
+                            ClearProgress();
                             if (kind != KIND_NONE) Console.WriteLine();
                             kind = KIND_THINK;
                             Console.Write("  ");

@@ -530,8 +530,8 @@ namespace Tau
             Console.WriteLine("  /help            Show this help");
             Console.WriteLine("  /new             Start a new session");
             Console.WriteLine("  /sessions        List saved sessions");
-            Console.WriteLine("  /open <id>       Open the given session");
-            Console.WriteLine("  /delete <n>      Delete a session (numbers come from /sessions)");
+            Console.WriteLine("  /open <n|id>     Open a session by number or id");
+            Console.WriteLine("  /delete <n|id>   Delete a session by number or id");
             Console.WriteLine("  /clear           Clear the current session's history");
             Console.WriteLine("  /config          Show the current settings");
             Console.WriteLine("  /config edit     Edit settings interactively");
