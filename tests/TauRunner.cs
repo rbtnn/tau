@@ -89,7 +89,7 @@ namespace Tau.Tests
                 string dll = Path.Combine(outDir, "tau.dll");
 
                 // 毎回ビルドする(ソース変更を反映するため)。
-                // 失敗したら既存の DLL を使う。
+                string buildLog = "";
                 try
                 {
                     ProcessStartInfo psi = new()
@@ -114,25 +114,26 @@ namespace Tau.Tests
                     psi.ArgumentList.Add("quiet");
 
                     using Process p = Process.Start(psi);
-                    p.StandardOutput.ReadToEnd();
-                    p.StandardError.ReadToEnd();
-                    p.WaitForExit(180_000);
+                    System.Threading.Tasks.Task<string> so = p.StandardOutput.ReadToEndAsync();
+                    System.Threading.Tasks.Task<string> se = p.StandardError.ReadToEndAsync();
+                    if (!p.WaitForExit(180_000)) throw new TimeoutException("dotnet build timed out");
+                    p.WaitForExit();
+                    buildLog = so.Result + se.Result;
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    buildLog = ex.Message;
+                }
 
+                // テスト出力先 (AppContext.BaseDirectory) は使わない。
+                // tau-cli.csproj は自己完結なので、dotnet test が参照した
+                // 成果物は tau.runtimeconfig.json がフレームワークを指さず、
+                // `dotnet tau.dll` では起動できない。
                 if (!File.Exists(dll))
                 {
-                    // フォールバック: 既にどこかにビルド済みのものを使う
-                    string[] candidates =
-                    {
-                        Path.Combine(AppContext.BaseDirectory, "tau.dll"),
-                        Path.Combine(repo, "bin", "Release", "net10.0", "tau.dll"),
-                    };
-                    foreach (string c in candidates)
-                        if (File.Exists(c)) { cachedDll = c; return c; }
-
                     throw new FileNotFoundException(
-                        "tau.dll could not be built. Looked in: " + outDir);
+                        "tau.dll could not be built in " + outDir
+                        + (buildLog.Length > 0 ? "\n--- dotnet build ---\n" + buildLog : ""));
                 }
 
                 cachedDll = dll;
