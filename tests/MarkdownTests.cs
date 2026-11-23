@@ -238,6 +238,77 @@ namespace Tau.Tests
                 Assert.Equal(widths[0], w);
         }
 
+        // ---------------- インライン書式と "_" の扱い ----------------
+        //
+        // "_" は識別子の区切り (XXX_YYY_ZZZ) にもよく使われる。
+        // 単語の内側の "_" を斜体とみなすと、識別子から "_" が消えてしまう。
+
+        private static string InlineText(string s)
+        {
+            MarkdownRenderer.Configure(false);   // 色なしで比較しやすくする
+            return MarkdownRenderer.Inline(s);
+        }
+
+        [Theory]
+        [InlineData("XXX_YYY_ZZZ")]
+        [InlineData("FOO_BAR")]
+        [InlineData("snake_case_name")]
+        [InlineData("a_b_c")]
+        [InlineData("x_1_y_2_z")]
+        [InlineData("A_B_C_D_E")]
+        [InlineData("call_me_now()")]
+        [InlineData("foo_bar baz_qux")]
+        public void IntrawordUnderscoresAreKept(string text)
+        {
+            Assert.Equal(text, InlineText(text));
+        }
+
+        [Theory]
+        [InlineData("_italic_", "italic")]
+        [InlineData("__bold__", "bold")]
+        [InlineData("prefix _italic_ suffix", "prefix italic suffix")]
+        [InlineData("_日本語_", "日本語")]
+        public void UnderscoreEmphasisStillWorks(string input, string expected)
+        {
+            Assert.Equal(expected, InlineText(input));
+        }
+
+        [Theory]
+        [InlineData("*bold*", "bold")]
+        [InlineData("**strong**", "strong")]
+        [InlineData("a*b*c", "abc")]
+        public void AsteriskEmphasisStillWorks(string input, string expected)
+        {
+            Assert.Equal(expected, InlineText(input));
+        }
+
+        [Fact]
+        public void AsteriskEmphasisIgnoresIntrawordRule()
+        {
+            // "*" は識別子に使われないので、単語の内側でも装飾してよい
+            Assert.Equal("abc", InlineText("a*b*c"));
+        }
+
+        [Fact]
+        public void UnderscoreInsideBoldIsKept()
+        {
+            Assert.Equal("a_b_c", InlineText("**a_b_c**"));
+        }
+
+        [Fact]
+        public void LoneUnderscoreIsKept()
+        {
+            Assert.Equal("_ leading space", InlineText("_ leading space"));
+            Assert.Equal("trailing _ space", InlineText("trailing _ space"));
+        }
+
+        [Fact]
+        public void JapaneseUnderscoreIsNotEmphasis()
+        {
+            // 日本語は単語の区切りにならないので、識別子として残す
+            Assert.Equal("日本語_テスト_日本語", InlineText("日本語_テスト_日本語"));
+        }
+
         [Fact]
         public void HeadingMarkersAreRemoved()
         {
@@ -254,12 +325,69 @@ namespace Tau.Tests
         }
 
         [Fact]
-        public void CodeFenceIsRenderedAsABox()
+        public void CodeFenceShowsLanguageLabel()
         {
             string output = Render("```python\nprint(1)\n```\n");
             Assert.Contains("python", output);
             Assert.Contains("print(1)", output);
-            Assert.Contains("┌", output);
+        }
+
+        [Fact]
+        public void CodeBlockHasNoBoxBorders()
+        {
+            // 罫線で囲むと、端末からコピーしたときに │ や余白まで
+            // 貼り付いてしまう。コードだけをコピーできるようにする。
+            string output = Render("```python\nprint(1)\n```\n");
+            Assert.DoesNotContain("┌", output);
+            Assert.DoesNotContain("└", output);
+            Assert.DoesNotContain("│", output);
+        }
+
+        [Fact]
+        public void CodeLinesStartAtColumnZero()
+        {
+            // 行頭に余白を置かない(コピーした文字列を汚さないため)
+            string output = Render("```python\nprint(1)\n```\n");
+            bool found = false;
+            foreach (string line in output.Split('\n'))
+            {
+                if (line == "print(1)") found = true;
+            }
+            Assert.True(found, "code line must start at column 0, got:\n" + output);
+        }
+
+        [Fact]
+        public void CodeBlockPreservesIndentation()
+        {
+            string output = Render("```python\nif x:\n    print(1)\n```\n");
+            bool found = false;
+            foreach (string line in output.Split('\n'))
+            {
+                if (line == "    print(1)") found = true;
+            }
+            Assert.True(found, "indentation must be preserved, got:\n" + output);
+        }
+
+        [Fact]
+        public void CodeBlockKeepsBlankLinesInside()
+        {
+            string output = Render("```\na\n\nb\n```\n");
+            var lines = new List<string>(output.Split('\n'));
+            Assert.Contains("a", lines);
+            Assert.Contains("", lines);
+            Assert.Contains("b", lines);
+        }
+
+        [Fact]
+        public void CodeBlockDoesNotPadWithTrailingSpaces()
+        {
+            // 右側を空白で埋めると、コピーしたときに末尾の空白が付く
+            string output = Render("```\nx\nlonger line\n```\n");
+            foreach (string line in output.Split('\n'))
+            {
+                if (line.StartsWith("x") || line.StartsWith("longer"))
+                    Assert.Equal(line.TrimEnd(), line);
+            }
         }
 
         [Fact]

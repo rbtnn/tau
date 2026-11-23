@@ -202,38 +202,32 @@ namespace Tau
             return t.Substring(3).Trim();
         }
 
+        // コードブロック。
+        //
+        // 罫線(│ ┌ └)で囲むと、端末からコピーしたときに罫線と余白まで
+        // 一緒に貼り付いてしまう。コードだけをコピーできるよう、
+        // 罫線は使わず「インデント + 見出し + 色」で示す。
         static void RenderCodeBlock(string code, string lang)
         {
             Console.WriteLine();
 
             string[] codeLines = code.Replace("\r\n", "\n").Split('\n');
-            int width = 0;
-            for (int i = 0; i < codeLines.Length; i++)
-                width = Math.Max(width, VisibleLength(codeLines[i]));
-            if (width < 8) width = 8;
+            int last = codeLines.Length - 1;
+            if (last >= 0 && codeLines[last].Length == 0) last--;   // 末尾の空行は出さない
 
-            // 上枠(言語名があれば枠内に表示する)
-            string top;
+            // 見出し(言語名)。罫線の代わりに控えめなラベルを置く。
             if (lang.Length > 0)
+                Console.WriteLine(W(GRAY) + "── " + lang + R());
+
+            for (int i = 0; i <= last; i++)
             {
-                string label = " " + lang + " ";
-                int rest = width + 2 - VisibleLength(label);
-                if (rest < 0) rest = 0;
-                top = "  ┌" + label + new string('─', rest) + "┐";
+                // 行頭に余白を置かない。端末からコピーしたときに
+                // コードだけがそのまま貼り付くようにするため。
+                Console.WriteLine(W(GREEN) + codeLines[i] + R());
             }
-            else
-            {
-                top = "  ┌" + new string('─', width + 2) + "┐";
-            }
-            Console.WriteLine(W(GRAY) + top + R());
-            for (int i = 0; i < codeLines.Length; i++)
-            {
-                if (i == codeLines.Length - 1 && codeLines[i].Length == 0) break;
-                Console.WriteLine(W(GRAY) + "  │" + R() + " " + W(GREEN) + codeLines[i]
-                    + new string(' ', width - VisibleLength(codeLines[i])) + R() + " "
-                    + W(GRAY) + "│" + R());
-            }
-            Console.WriteLine(W(GRAY) + "  └" + new string('─', width + 2) + "┘" + R());
+
+            if (lang.Length > 0)
+                Console.WriteLine(W(GRAY) + "──" + R());
             Console.WriteLine();
         }
 
@@ -443,6 +437,23 @@ namespace Tau
         // ---------------- インライン書式 ----------------
 
         // インラインの Markdown(太字・斜体・コード・リンク)を ANSI に変換する
+        // 範囲外なら '\0' を返す。
+        static char CharAt(string s, int i)
+        {
+            return (i < 0 || i >= s.Length) ? '\0' : s[i];
+        }
+
+        // 単語の一部とみなす文字か。
+        // 英数字に加えて、ASCII 以外の文字(日本語など)も単語の一部とみなす。
+        // 日本語_テスト_日本語 のような識別子から "_" が消えないようにするため。
+        static bool IsWordChar(char c)
+        {
+            if (c == '\0') return false;
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                || (c >= '0' && c <= '9')) return true;
+            return c > 0x7f;
+        }
+
         public static string Inline(string s)
         {
             if (s == null) return "";
@@ -466,31 +477,49 @@ namespace Tau
                 }
 
                 // 太字 **text** / __text__
+                //
+                // "_" は単語の区切りにもよく使われる (XXX_YYY_ZZZ のような
+                // 識別子)。CommonMark と同じく、単語の内側にある "_" は
+                // 装飾の開始/終了とみなさない。"*" はその制限を掛けない。
                 if ((c == '*' || c == '_') && i + 1 < s.Length && s[i + 1] == c)
                 {
-                    string marker = new string(c, 2);
-                    int end = s.IndexOf(marker, i + 2);
-                    if (end > i + 1)
+                    bool canOpen = (c == '*') || !IsWordChar(CharAt(s, i - 1));
+                    if (canOpen)
                     {
-                        string inner = s.Substring(i + 2, end - i - 2);
-                        sb.Append(W(BOLD)).Append(Inline(inner)).Append(R());
-                        i = end + 2;
-                        continue;
+                        string marker = new string(c, 2);
+                        int end = s.IndexOf(marker, i + 2);
+                        // 終了側も単語の内側なら装飾しない
+                        while (end > i + 1 && c == '_' && IsWordChar(CharAt(s, end + 2)))
+                            end = s.IndexOf(marker, end + 1);
+                        if (end > i + 1)
+                        {
+                            string inner = s.Substring(i + 2, end - i - 2);
+                            sb.Append(W(BOLD)).Append(Inline(inner)).Append(R());
+                            i = end + 2;
+                            continue;
+                        }
                     }
                 }
 
                 // 斜体 *text* / _text_
                 if (c == '*' || c == '_')
                 {
-                    int end = s.IndexOf(c, i + 1);
-                    if (end > i)
+                    bool canOpen = (c == '*') || !IsWordChar(CharAt(s, i - 1));
+                    if (canOpen)
                     {
-                        string inner = s.Substring(i + 1, end - i - 1);
-                        if (inner.Length > 0 && inner.IndexOf(' ') != 0)
+                        int end = s.IndexOf(c, i + 1);
+                        // "_" は単語の内側で閉じない
+                        while (end > i && c == '_' && IsWordChar(CharAt(s, end + 1)))
+                            end = s.IndexOf(c, end + 1);
+                        if (end > i)
                         {
-                            sb.Append(W(ITALIC)).Append(Inline(inner)).Append(R());
-                            i = end + 1;
-                            continue;
+                            string inner = s.Substring(i + 1, end - i - 1);
+                            if (inner.Length > 0 && inner.IndexOf(' ') != 0)
+                            {
+                                sb.Append(W(ITALIC)).Append(Inline(inner)).Append(R());
+                                i = end + 1;
+                                continue;
+                            }
                         }
                     }
                 }

@@ -105,6 +105,7 @@ class MockMulti(BaseHTTPRequestHandler):
 MD_REPLY = (
     "# Heading1\n## Heading2\n\n"
     "This is **bold** and *italic* and `code`.\n\n"
+    "設定は XXX_YYY_ZZZ と FOO_BAR です。\n\n"
     "- item1\n- item2\n\n"
     "1. num1\n2. num2\n\n"
     "| Name | Qty | Note |\n|:-----|----:|:----:|\n"
@@ -714,6 +715,20 @@ def main():
         ok("インラインコードの ` が除去されて表示されます")
     else:
         bad("インラインコードが Markdown のまま出力されています")
+    # 識別子の "_" が斜体扱いで消えないこと
+    # (XXX_YYY_ZZZ が XXXYYYZZZ になってしまう不具合の回帰テスト)
+    if "XXX_YYY_ZZZ" in out:
+        ok("識別子 XXX_YYY_ZZZ の _ が保持されます")
+    else:
+        bad("識別子の _ が斜体扱いで消えています: " + out[-400:])
+    if "FOO_BAR" in out:
+        ok("識別子 FOO_BAR の _ が保持されます")
+    else:
+        bad("FOO_BAR の _ が消えています")
+    if "XXXYYYZZZ" not in out:
+        ok("識別子が連結されていません")
+    else:
+        bad("識別子の _ が削除されています")
     # 表がボーダー文字で整形されていること
     if "┌" in out and "┬" in out and "└" in out and "│" in out:
         ok("表がボーダー文字(罫線)で整形されます")
@@ -728,11 +743,21 @@ def main():
         ok("箇条書きが・で表示されます")
     else:
         bad("箇条書きが整形されていません")
-    # コードブロックが枠付きで表示されること
-    if "┌ python" in out or "┌─ python" in out:
-        ok("コードブロックが枠付きで表示されます")
+    # コードブロックに言語名が出て、罫線が付かないこと
+    # (罫線があると端末からコピーしたときに │ まで貼り付いてしまう)
+    if "python" in out:
+        ok("コードブロックに言語名が表示されます")
     else:
-        bad("コードブロックが枠付きになっていません")
+        bad("コードブロックの言語名がありません")
+    code_lines = [l for l in out.splitlines() if "print(" in l or "def " in l]
+    if code_lines and not any(("│" in l or "┌" in l or "└" in l) for l in code_lines):
+        ok("コードブロックに罫線が付きません(コピーしやすい)")
+    else:
+        bad("コードブロックに罫線が付いています: %r" % code_lines[:3])
+    if code_lines and all(l == l.lstrip() or l.startswith("    ") for l in code_lines):
+        ok("コード行が行頭から始まります(余白なし)")
+    else:
+        bad("コード行に余計な余白があります: %r" % code_lines[:3])
     # 引用が縦線で表示されること
     if "│ quoted text" in out:
         ok("引用が縦線で表示されます")
