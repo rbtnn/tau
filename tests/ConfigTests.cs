@@ -21,7 +21,7 @@ namespace Tau.Tests
             "LLM_CONTEXT_WINDOW", "LLM_RESERVE_TOKENS", "LLM_KEEP_RECENT_TOKENS",
             "LLM_PROXY_URL", "LLM_PROXY_USER", "LLM_PROXY_PASS",
             "LLM_USE_SYSTEM_PROXY", "AI_SYSTEM_PROMPT", "TAU_CONFIG",
-            "TAU_INPUT_ENCODING", "XDG_CONFIG_HOME", "HOME", "APPDATA",
+            "TAU_INPUT_ENCODING", "XDG_CONFIG_HOME", "HOME", "APPDATA", "TAU_DATA_DIR",
         };
 
         public ConfigTests()
@@ -38,6 +38,9 @@ namespace Tau.Tests
             Environment.SetEnvironmentVariable("HOME", _dir);
             Environment.SetEnvironmentVariable("XDG_CONFIG_HOME",
                 Path.Combine(_dir, ".config"));
+            // Windows では %APPDATA% が差し替わらないので、保存先を明示する
+            Environment.SetEnvironmentVariable("TAU_DATA_DIR",
+                Path.Combine(_dir, ".config", "tau-cli"));
         }
 
         public void Dispose()
@@ -323,6 +326,41 @@ namespace Tau.Tests
         {
             try { Directory.Delete(Config.LegacyDataDir(), true); } catch { }
             Assert.False(Config.MigrateLegacyData());
+        }
+
+        // ---------------- 保存先の上書き ----------------
+
+        [Fact]
+        public void DataDirCanBeOverriddenWithEnvironmentVariable()
+        {
+            // Windows では %APPDATA% を環境変数で差し替えられないため、
+            // 保存先は TAU_DATA_DIR で指定できる必要がある。
+            string before = Environment.GetEnvironmentVariable("TAU_DATA_DIR");
+            Environment.SetEnvironmentVariable("TAU_DATA_DIR", _dir);
+            try
+            {
+                Assert.Equal(_dir, Config.TauDataDir());
+                Assert.Equal(Path.Combine(_dir, "tau.json"), Config.DefaultConfigPath());
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("TAU_DATA_DIR", before);
+            }
+        }
+
+        [Fact]
+        public void BlankDataDirFallsBackToAppData()
+        {
+            string before = Environment.GetEnvironmentVariable("TAU_DATA_DIR");
+            Environment.SetEnvironmentVariable("TAU_DATA_DIR", "   ");
+            try
+            {
+                Assert.EndsWith("tau-cli", Config.TauDataDir());
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("TAU_DATA_DIR", before);
+            }
         }
     }
 }

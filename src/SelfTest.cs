@@ -84,8 +84,23 @@ namespace Tau
 
             Environment();
             ConsoleModes();
-            Encodings();
-            BufferLimits();
+
+            // 入力がリダイレクトされていると、コンソールのコードページではなく
+            // パイプの既定エンコーディングが使われる。利用者の入力環境では
+            // ないので、エンコーディングの往復は調べない。
+            if (SafeRedirectedBool())
+            {
+                Section("3. input encoding round-trip");
+                Skip("stdin is redirected (console input encoding is not in use)");
+                Section("4. input buffer limit (254-character wall)");
+                Skip("stdin is redirected");
+            }
+            else
+            {
+                Encodings();
+                BufferLimits();
+            }
+
             Tls(cfg);
 
             if (!online)
@@ -131,6 +146,14 @@ namespace Tau
 
             // 入力と出力のコードページが食い違うと、Windows では日本語が
             // NUL に化けることがある(dotnet/runtime#43295)。
+            // ただしリダイレクト時はパイプの既定エンコーディングなので、
+            // 利用者のコンソール設定とは無関係。
+            if (SafeRedirectedBool())
+            {
+                Skip("input and output encodings match (stdin is redirected)");
+                return;
+            }
+
             bool match = false;
             try
             {

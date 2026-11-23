@@ -108,8 +108,14 @@ namespace Tau
 
         // tau-cli 独自のデータディレクトリ(設定とセッションの保存先)。
         // tau-web とは共有しない。
+        //
+        // TAU_DATA_DIR が設定されていればそれを使う。
+        // Windows では %APPDATA% を環境変数で差し替えられないため、
+        // テストや複数プロファイルで保存先を分けるにはこれを使う。
         public static string TauDataDir()
         {
+            string dir = Environment.GetEnvironmentVariable("TAU_DATA_DIR");
+            if (dir != null && dir.Trim().Length > 0) return dir.Trim();
             return AppDirUnder("tau-cli");
         }
 

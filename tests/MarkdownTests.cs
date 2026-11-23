@@ -187,7 +187,10 @@ namespace Tau.Tests
 
         private static string Render(string md)
         {
-            StringWriter sw = new StringWriter();
+            // 改行コードを LF に固定する。Windows の StringWriter は
+            // 既定で CRLF を書くため、Split('\n') で比べると行末に
+            // '\r' が残ってしまう。
+            StringWriter sw = new StringWriter { NewLine = "\n" };
             TextWriter old = Console.Out;
             try
             {

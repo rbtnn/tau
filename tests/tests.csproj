@@ -23,4 +23,20 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <!--
+    テストは tau を子プロセスとして起動する。tau-cli.csproj は自己完結 +
+    単一ファイル配布なので、参照しただけでは `dotnet tau.dll` で動かない。
+    フレームワーク依存の DLL を、テスト実行前にここへ用意しておく。
+    (テスト実行中にビルドすると、並列実行するテストと競合する)
+  -->
+  <PropertyGroup>
+    <TauTestFxDir>$(MSBuildThisFileDirectory)tau-fx\bin\</TauTestFxDir>
+  </PropertyGroup>
+
+  <Target Name="BuildTauForTests" BeforeTargets="VSTest">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\tau-cli.csproj"
+             Targets="Build"
+             Properties="Configuration=Release;PublishSingleFile=false;SelfContained=false;OutputPath=$(TauTestFxDir)" />
+  </Target>
+
 </Project>

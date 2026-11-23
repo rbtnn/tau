@@ -22,7 +22,7 @@ namespace Tau.Tests
         readonly Dictionary<string, string> savedEnv = new();
         static readonly string[] EnvKeys =
         {
-            "HOME", "XDG_CONFIG_HOME", "APPDATA",
+            "HOME", "XDG_CONFIG_HOME", "APPDATA", "TAU_DATA_DIR",
             "TAU_CONFIG", "TAU_INPUT_ENCODING", "TAU_DEBUG",
             "TAU_AMBIGUOUS_WIDTH", "TAU_TEST_NO_INPUT", "TAU_TEST_WIDTH_FILE",
             "LLM_API_URL", "LLM_API_KEY", "LLM_MODEL", "ALLOW_TOOLS",
@@ -53,6 +53,10 @@ namespace Tau.Tests
             SessionsDir = Path.Combine(DataDir, "sessions");
             Directory.CreateDirectory(SessionsDir);
             ConfigPath = Path.Combine(DataDir, "tau.json");
+
+            // Windows では %APPDATA% を HOME / XDG_CONFIG_HOME で
+            // 差し替えられない。TAU_DATA_DIR で保存先を固定する。
+            Environment.SetEnvironmentVariable("TAU_DATA_DIR", DataDir);
         }
 
         /// <summary>設定ファイルを書く。</summary>
@@ -76,7 +80,11 @@ namespace Tau.Tests
         ///
         /// tau-cli.csproj は自己完結 + 単一ファイル配布なので、テストから
         /// 参照しただけでは `dotnet tau.dll` で起動できない。テスト用に
-        /// フレームワーク依存でビルドしたものを使う(初回のみビルド)。
+        /// フレームワーク依存でビルドしたものを使う。
+        ///
+        /// tests.csproj の BuildTauForTests がテスト実行前にこれを用意する。
+        /// 無い場合だけここでビルドする(テスト実行中のビルドは並列実行と
+        /// 競合するため、通常は走らない)。
         /// </summary>
         public static string TauDll()
         {
@@ -88,7 +96,13 @@ namespace Tau.Tests
                 string outDir = Path.Combine(repo, "tests", "tau-fx", "bin");
                 string dll = Path.Combine(outDir, "tau.dll");
 
-                // 毎回ビルドする(ソース変更を反映するため)。
+                if (File.Exists(dll))
+                {
+                    cachedDll = dll;
+                    return dll;
+                }
+
+                // まだ無い場合の保険としてビルドする。
                 string buildLog = "";
                 try
                 {
@@ -106,7 +120,9 @@ namespace Tau.Tests
                     psi.ArgumentList.Add("Release");
                     psi.ArgumentList.Add("-p:PublishSingleFile=false");
                     psi.ArgumentList.Add("-p:SelfContained=false");
-                    psi.ArgumentList.Add("-p:RuntimeIdentifiers=");
+                    // RuntimeIdentifiers を空で渡すと、Windows の SDK では
+                    // NuGet が "Value cannot be null" で失敗する。
+                    // テスト用ビルドでは RID を指定しない。
                     psi.ArgumentList.Add("-o");
                     psi.ArgumentList.Add(outDir);
                     psi.ArgumentList.Add("--nologo");
@@ -178,7 +194,9 @@ namespace Tau.Tests
                     throw new TimeoutException("tau did not exit within " + timeoutSec + "s");
                 }
                 p.WaitForExit();   // 非同期読み取りの完了を待つ
-                return sb.ToString() + err.ToString();
+                // 改行を LF に揃える。Windows では AppendLine が CRLF を
+                // 入れるため、テストの期待値が環境で変わってしまう。
+                return (sb.ToString() + err.ToString()).Replace("\r\n", "\n");
             }
             catch
             {
@@ -219,16 +237,26 @@ namespace Tau.Tests
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 WorkingDirectory = WorkDir,
+                // テストは UTF-8 で書き込み、tau も UTF-8 で読む。
+                // Windows の既定コードページのままだと日本語が化ける。
+                StandardInputEncoding = new UTF8Encoding(false),
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8,
             };
             for (int i = 1; i < cmd.Count; i++) psi.ArgumentList.Add(cmd[i]);
+
+            // パイプ入力でも tau が UTF-8 で読むように指定する。
+            psi.Environment["TAU_INPUT_ENCODING"] = "utf-8";
 
             foreach (KeyValuePair<string, string> kv in savedEnv)
             {
                 string v = Environment.GetEnvironmentVariable(kv.Key);
                 if (v != null) psi.Environment[kv.Key] = v;
             }
+            // テストが設定した保存先は必ず渡す(Windows では %APPDATA% が
+            // 差し替わらないため)。
+            string dataDir = Environment.GetEnvironmentVariable("TAU_DATA_DIR");
+            if (dataDir != null) psi.Environment["TAU_DATA_DIR"] = dataDir;
             if (extraEnv != null)
                 foreach (KeyValuePair<string, string> kv in extraEnv)
                     psi.Environment[kv.Key] = kv.Value;

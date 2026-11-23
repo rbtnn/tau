@@ -14,7 +14,8 @@ namespace Tau.Tests
     {
         private readonly string _dir;
         private readonly Dictionary<string, string> _savedEnv = new();
-        private static readonly string[] EnvKeys = { "HOME", "XDG_CONFIG_HOME", "APPDATA" };
+        private static readonly string[] EnvKeys =
+            { "HOME", "XDG_CONFIG_HOME", "APPDATA", "TAU_DATA_DIR" };
 
         public SessionStoreTests()
         {
@@ -30,6 +31,9 @@ namespace Tau.Tests
             Environment.SetEnvironmentVariable("HOME", _dir);
             Environment.SetEnvironmentVariable("XDG_CONFIG_HOME",
                 Path.Combine(_dir, ".config"));
+            // Windows では %APPDATA% が差し替わらないので、保存先を明示する
+            Environment.SetEnvironmentVariable("TAU_DATA_DIR",
+                Path.Combine(_dir, ".config", "tau-cli"));
         }
 
         public void Dispose()

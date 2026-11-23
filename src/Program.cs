@@ -137,7 +137,7 @@ namespace Tau
             SetupConsoleEncoding(cfg);
 
             // 入力バッファを広げる(254 文字の上限を回避する)。
-            SetupInputBuffer();
+            SetupInputBuffer(cfg);
 
             // 行編集(Emacs キーバインド)を使えるか判定する。
             LineEditor.Configure(cfg);
@@ -436,7 +436,7 @@ namespace Tau
             catch { return false; }
         }
 
-        static void SetupInputBuffer()
+        static void SetupInputBuffer(Config cfg)
         {
             const int READLINE_BUFFER_SIZE = 64 * 1024;   // 64KB
 
@@ -447,8 +447,21 @@ namespace Tau
                 // Console.In は Windows では ReadFile を使うが、
                 // ENABLE_LINE_INPUT は ReadFile にも効くため、コンソールの
                 // 行編集(Ctrl-V の貼り付け・矢印キー・IME)はそのまま働く。
+                //
+                // 入力がリダイレクトされている場合、Console.InputEncoding は
+                // OS の既定(Windows では CP437)のままで、日本語を読めない。
+                // 設定の inputEncoding を優先して、パイプでも正しく読む。
+                Encoding enc = null;
+                if (cfg != null)
+                    enc = ResolveEncoding(cfg.InputEncoding);
+                if (enc == null)
+                {
+                    try { enc = Console.InputEncoding; }
+                    catch { enc = Encoding.UTF8; }
+                }
+
                 Stream stdin = Console.OpenStandardInput(READLINE_BUFFER_SIZE);
-                Console.SetIn(new StreamReader(stdin, Console.InputEncoding,
+                Console.SetIn(new StreamReader(stdin, enc,
                                                false, READLINE_BUFFER_SIZE));
 
                 // 念のため行編集モードを有効にする
