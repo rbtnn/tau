@@ -1,0 +1,262 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Text;
+using System.Threading;
+using Tau;
+
+namespace Tau.Tests
+{
+    /// <summary>
+    /// tau を実際にプロセスとして起動するための補助。
+    /// test_tau.py がやっていた「実行時の挙動」を xunit から確認する。
+    /// </summary>
+    public sealed class TauRunner : IDisposable
+    {
+        public string WorkDir { get; }
+        public string ConfigPath { get; }
+        public string DataDir { get; }
+        public string SessionsDir { get; }
+
+        readonly Dictionary<string, string> savedEnv = new();
+        static readonly string[] EnvKeys =
+        {
+            "HOME", "XDG_CONFIG_HOME", "APPDATA",
+            "TAU_CONFIG", "TAU_INPUT_ENCODING", "TAU_DEBUG",
+            "TAU_AMBIGUOUS_WIDTH", "TAU_TEST_NO_INPUT", "TAU_TEST_WIDTH_FILE",
+            "LLM_API_URL", "LLM_API_KEY", "LLM_MODEL", "ALLOW_TOOLS",
+            "LLM_EMIT_REASONING", "MAX_TOOLS_PER_TURN", "TOOL_TIMEOUT_SEC",
+            "LLM_CONTEXT_WINDOW", "LLM_RESERVE_TOKENS", "LLM_KEEP_RECENT_TOKENS",
+            "LLM_PROXY_URL", "LLM_PROXY_USER", "LLM_PROXY_PASS",
+            "LLM_USE_SYSTEM_PROXY", "AI_SYSTEM_PROMPT",
+        };
+
+        public TauRunner()
+        {
+            WorkDir = Path.Combine(Path.GetTempPath(),
+                "tau-run-" + Guid.NewGuid().ToString("N").Substring(0, 8));
+            Directory.CreateDirectory(WorkDir);
+
+            // 実環境の設定を引き継がないよう、対象の環境変数を消す
+            foreach (string k in EnvKeys)
+            {
+                savedEnv[k] = Environment.GetEnvironmentVariable(k);
+                Environment.SetEnvironmentVariable(k, null);
+            }
+
+            Environment.SetEnvironmentVariable("HOME", WorkDir);
+            Environment.SetEnvironmentVariable("XDG_CONFIG_HOME",
+                Path.Combine(WorkDir, ".config"));
+
+            DataDir = Path.Combine(WorkDir, ".config", "tau-cli");
+            SessionsDir = Path.Combine(DataDir, "sessions");
+            Directory.CreateDirectory(SessionsDir);
+            ConfigPath = Path.Combine(DataDir, "tau.json");
+        }
+
+        /// <summary>設定ファイルを書く。</summary>
+        public void WriteConfig(string apiUrl, string model = "m",
+                                bool allowTools = false, bool emitReasoning = false)
+        {
+            Dictionary<string, object> d = new();
+            d["llmApiUrl"] = apiUrl;
+            d["llmApiKey"] = "k";
+            d["model"] = model;
+            d["allowTools"] = allowTools;
+            d["emitReasoning"] = emitReasoning;
+            d["useSystemProxy"] = false;
+            File.WriteAllText(ConfigPath, Json.ToString(d), Encoding.UTF8);
+        }
+
+        static string cachedDll;
+
+        /// <summary>
+        /// tau の DLL のパス。
+        ///
+        /// tau-cli.csproj は自己完結 + 単一ファイル配布なので、テストから
+        /// 参照しただけでは `dotnet tau.dll` で起動できない。テスト用に
+        /// フレームワーク依存でビルドしたものを使う(初回のみビルド)。
+        /// </summary>
+        public static string TauDll()
+        {
+            lock (typeof(TauRunner))
+            {
+                if (cachedDll != null && File.Exists(cachedDll)) return cachedDll;
+
+                string repo = RepoRoot();
+                string outDir = Path.Combine(repo, "tests", "tau-fx", "bin");
+                string dll = Path.Combine(outDir, "tau.dll");
+
+                // 毎回ビルドする(ソース変更を反映するため)。
+                // 失敗したら既存の DLL を使う。
+                try
+                {
+                    ProcessStartInfo psi = new()
+                    {
+                        FileName = "dotnet",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        WorkingDirectory = repo,
+                    };
+                    psi.ArgumentList.Add("build");
+                    psi.ArgumentList.Add(Path.Combine(repo, "tau-cli.csproj"));
+                    psi.ArgumentList.Add("-c");
+                    psi.ArgumentList.Add("Release");
+                    psi.ArgumentList.Add("-p:PublishSingleFile=false");
+                    psi.ArgumentList.Add("-p:SelfContained=false");
+                    psi.ArgumentList.Add("-p:RuntimeIdentifiers=");
+                    psi.ArgumentList.Add("-o");
+                    psi.ArgumentList.Add(outDir);
+                    psi.ArgumentList.Add("--nologo");
+                    psi.ArgumentList.Add("-v");
+                    psi.ArgumentList.Add("quiet");
+
+                    using Process p = Process.Start(psi);
+                    p.StandardOutput.ReadToEnd();
+                    p.StandardError.ReadToEnd();
+                    p.WaitForExit(180_000);
+                }
+                catch { }
+
+                if (!File.Exists(dll))
+                {
+                    // フォールバック: 既にどこかにビルド済みのものを使う
+                    string[] candidates =
+                    {
+                        Path.Combine(AppContext.BaseDirectory, "tau.dll"),
+                        Path.Combine(repo, "bin", "Release", "net10.0", "tau.dll"),
+                    };
+                    foreach (string c in candidates)
+                        if (File.Exists(c)) { cachedDll = c; return c; }
+
+                    throw new FileNotFoundException(
+                        "tau.dll could not be built. Looked in: " + outDir);
+                }
+
+                cachedDll = dll;
+                return dll;
+            }
+        }
+
+        static string RepoRoot()
+        {
+            string dir = AppContext.BaseDirectory;
+            for (int i = 0; i < 8 && dir != null; i++)
+            {
+                if (File.Exists(Path.Combine(dir, "tau-cli.csproj"))) return dir;
+                dir = Path.GetDirectoryName(dir);
+            }
+            return AppContext.BaseDirectory;
+        }
+
+        /// <summary>tau を起動して、stdin に流し込む。出力を返す。</summary>
+        public string Run(string stdin, string[] args = null, int timeoutSec = 60,
+                          Dictionary<string, string> extraEnv = null)
+        {
+            List<string> cmd = new() { "dotnet", TauDll() };
+            if (args != null) cmd.AddRange(args);
+
+            ProcessStartInfo psi = new()
+            {
+                FileName = cmd[0],
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                WorkingDirectory = WorkDir,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
+            };
+            for (int i = 1; i < cmd.Count; i++) psi.ArgumentList.Add(cmd[i]);
+
+            foreach (KeyValuePair<string, string> kv in savedEnv)
+            {
+                string v = Environment.GetEnvironmentVariable(kv.Key);
+                if (v != null) psi.Environment[kv.Key] = v;
+            }
+            if (extraEnv != null)
+                foreach (KeyValuePair<string, string> kv in extraEnv)
+                    psi.Environment[kv.Key] = kv.Value;
+
+            using Process p = Process.Start(psi);
+            try
+            {
+                if (stdin != null)
+                {
+                    p.StandardInput.Write(stdin);
+                    p.StandardInput.Close();
+                }
+
+                StringBuilder sb = new();
+                StringBuilder err = new();
+                p.OutputDataReceived += (s, e) => { if (e.Data != null) sb.AppendLine(e.Data); };
+                p.ErrorDataReceived += (s, e) => { if (e.Data != null) err.AppendLine(e.Data); };
+                p.BeginOutputReadLine();
+                p.BeginErrorReadLine();
+
+                if (!p.WaitForExit(timeoutSec * 1000))
+                {
+                    try { p.Kill(true); } catch { }
+                    throw new TimeoutException("tau did not exit within " + timeoutSec + "s");
+                }
+                p.WaitForExit();   // 非同期読み取りの完了を待つ
+                return sb.ToString() + err.ToString();
+            }
+            catch
+            {
+                try { if (!p.HasExited) p.Kill(true); } catch { }
+                throw;
+            }
+        }
+
+        /// <summary>セッションのファイル一覧(新しい順)。</summary>
+        public string[] SessionFiles()
+        {
+            if (!Directory.Exists(SessionsDir)) return Array.Empty<string>();
+            string[] files = Directory.GetFiles(SessionsDir, "*.json");
+            List<string> list = new();
+            foreach (string f in files)
+                if (!Path.GetFileName(f).StartsWith("_")) list.Add(f);
+            list.Sort();
+            return list.ToArray();
+        }
+
+        /// <summary>保存されているセッションを全部読む。</summary>
+        public List<Dictionary<string, object>> LoadSessions()
+        {
+            List<Dictionary<string, object>> list = new();
+            foreach (string f in SessionFiles())
+            {
+                try
+                {
+                    string text = File.ReadAllText(f, Encoding.UTF8);
+                    if (Json.Parse(text) is Dictionary<string, object> d) list.Add(d);
+                }
+                catch { }
+            }
+            return list;
+        }
+
+        /// <summary>最後に保存されたセッション。</summary>
+        public Dictionary<string, object> LastSession()
+        {
+            string[] files = SessionFiles();
+            if (files.Length == 0) return null;
+            try
+            {
+                string text = File.ReadAllText(files[files.Length - 1], Encoding.UTF8);
+                return Json.Parse(text) as Dictionary<string, object>;
+            }
+            catch { return null; }
+        }
+
+        public void Dispose()
+        {
+            foreach (KeyValuePair<string, string> kv in savedEnv)
+                Environment.SetEnvironmentVariable(kv.Key, kv.Value);
+            try { Directory.Delete(WorkDir, true); } catch { }
+        }
+    }
+}

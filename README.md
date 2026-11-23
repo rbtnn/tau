@@ -975,78 +975,70 @@ xunit による単体テストです。.NET SDK 10 だけで動きます（`mono
 Passed!  - Failed: 0, Passed: 186, Skipped: 0, Total: 186
 ```
 
-### `test_tau.py`（実行時回帰テスト）
+### テストの種類
 
-モック LLM サーバを立てて `tau` を実際に起動し、プロセスとしての挙動を検証します。
-`dotnet` が必要です（ビルドして実行します）。
+テストは **2 つ**だけです。
 
-```
-python3 test_tau.py
-```
+| テスト | 実行 | 用途 |
+|---|---|---|
+| `dotnet test` | `dotnet test tests/tests.csproj` | 開発・CI。**すべての検証** |
+| `tau.exe --test` | `tau.exe --test` | ユーザーの実機診断（下記） |
 
-| 検証 | 内容 |
+以前あった `test_tau.py`（Python）は廃止し、内容をすべて `dotnet test` に移しました。
+Python は不要です。
+
+### 単体テストの内訳
+
+| ファイル | 内容 |
 |---|---|
-| ストリーミング | 思考と本文が表示されるか |
-| 進行状況の改行 | `connecting...` の行に思考や本文が連結しないか |
-| ツールループ | ツール実行 → 結果を LLM へ返して再問い合わせするか |
-| 設定の分離 | `tau.json` を参照し、`agentweb.json` に触れないか |
-| `models` 廃止 | `models` を使わず、保存時に取り除かれるか |
-| 日本語 | `InputEncoding` を変えず、日本語がそのまま保存されるか |
-| `/clear` | 履歴だけ消え、セッション(ID・タイトル)は残るか |
-| `/clear` 中止 | `n` でクリアされないか |
-| NUL 対策 | 入力の NUL 文字を取り除くか |
-| 入力消失 | NUL で全滅したときに警告するか |
-| 一部 NUL | 欠落を伝え、残りを送信するか |
-| `/config edit` の日本語 | 日本語のプロンプトが保存されるか |
-| NUL 行 | 空行と誤判定せず、やり直させるか |
-| 連続 NUL | 打ち切って案内するか |
-| `inputEncoding` | shift-jis / utf-8 / default を選べるか |
-| 別名 | `cp932` などを `shift-jis` として扱うか |
-| Markdown | 見出し・太字・コードの記号が除去されるか |
-| 表 | 罫線文字で整形されるか |
-| コードブロック | 罫線が付かず、行頭から始まるか（コピーしやすいか） |
-| 識別子 | `XXX_YYY_ZZZ` の `_` が消えないか |
-| 進行状況 | 受信中の進行状況が表示されるか |
-| バージョン | `--version` でビルドを確認できるか |
-| 入力診断 | 入力待ち・読み取り失敗が表示されるか |
-| 長い入力 | 長い日本語でも応答が返り、内容が欠けないか |
-| 行編集 | 自前の行編集が無効化され ReadLine を使うか |
-| 入力バッファ | 254 文字の上限を回避しているか |
-| LLM API | 実際に HTTP リクエストが通るか |
-| Ctrl-C | プロセスを終了せずターンだけ中止するか |
-| Ctrl-V | Windows の貼り付けが使えるか |
-| 長い混在入力 | 全角半角混在の長い入力が欠けないか |
-| 行編集の条件 | UTF-8 入力のときだけ有効になるか |
-| フォールバック | リダイレクト時は ReadLine を使うか |
-| `/model` | 任意のモデル名を受け付けるか |
-| `--web` | 起動・画面・SSE・履歴・CSRF 拒否・設定エンドポイントが無いこと |
-| セッション形式 | `agentweb` と同じキーで保存されるか |
-| `/config` | 設定一覧を表示し、API キーが伏せ字になるか |
-| `/set` | 値の変更と保存、不正値の拒否ができるか |
-| `/config edit` | 対話形式で変更・保存できるか |
-| `/delete` | 番号/ID 指定で削除でき、中止もできるか |
-| `/open` | 番号/ID どちらでも開けるか |
-| 表示中の削除 | 表示中のセッションを消すと別のセッションへ切り替わるか |
-| `think` / `steps` | 保存され、再開時に復元されるか |
-| `_state.json` | 最後のセッションが記録されるか |
-| 再開 | `--session` で続きから開けるか（LLM を呼ばないか） |
-| コマンド | `/model` `/tools` が効き、設定に保存されるか |
-| エラー | API エラーで落ちずに表示して続行するか |
-| TLS | `SocketsHttpHandler.SslOptions` に `Tls12 | Tls13` を設定しているか |
-| 診断 | `--diag` が TLS 各バージョンの接続可否を出すか |
-| デバッグ | `--debug` / `TAU_DEBUG` で詳細が出るか |
-| TLS 失敗 | `AuthenticationException` を TLS 失敗として検出するか |
-| TLS 除外 | 証明書エラーは再試行しないか |
-| TLS 再試行 | ストリーミング/非ストリーミングの両方で再試行するか |
-| TLS 適用 | LLM 呼び出しと `curl` の両方で設定しているか |
-| 廃止 API | `ServicePointManager` / `HttpWebRequest` を使っていないか |
-| 再試行 | 一時的な失敗をバックオフ付きで最大3回試すか |
-| 再試行除外 | HTTP エラー・証明書エラーは再試行しないか |
-| HTTP エラー | ステータスコードとレスポンス本文が表示されるか |
-| 途中切断 | 応答の途中切断を検出し、黙って確定しないか |
-| `/new` | 毎回異なるセッションが作られるか |
+| `tests/JsonTests.cs` | JSON のパース・シリアライズ・往復・厳格性 |
+| `tests/MarkdownTests.cs` | 表示幅・記号除去・表・コードブロック・識別子の `_` |
+| `tests/ConfigTests.cs` | 設定の保存・読み込み・未知キーの保持・移行 |
+| `tests/SessionStoreTests.cs` | セッションの保存・一覧・削除・`lastSession` |
+| `tests/WebServerTests.cs` | Web サーバの起動・停止・イベント名・`ConsoleUi` 差し替え |
 
----
+### 実行時テスト（tau をプロセスとして起動）
+
+`tests/MockLlm.cs` がモック LLM サーバ、`tests/TauRunner.cs` が tau の起動役です。
+`TauRunner` は初回にテスト用のフレームワーク依存ビルドを作ります（`tests/tau-fx/`）。
+
+| ファイル | 内容 |
+|---|---|
+| `tests/ChatIntegrationTests.cs` | ストリーミング・ツールループ・セッション・エラー処理 |
+| `tests/CommandIntegrationTests.cs` | `/model` `/tools` `/set` `/open` `/delete` `/clear` |
+| `tests/EncodingIntegrationTests.cs` | 日本語・NUL・長文入力・`--diag` `--test` |
+| `tests/WebIntegrationTests.cs` | `--web` の画面・SSE・CSRF 拒否・404 |
+| `tests/OutputIntegrationTests.cs` | 改行・進行状況・データ移行・デバッグ出力 |
+
+```
+Passed!  - Failed: 0, Passed: 306, Skipped: 0, Total: 306
+```
+
+所要時間は約 30 秒です。
+
+### `tau.exe --test`（実機診断）
+
+配布バイナリに同梱されています。**そのマシンでしか確かめられない致命的な項目**
+だけを確認します。
+
+```
+tau.exe --test              # ネットワークも確認
+tau.exe --test=offline      # ネットワークを使わない
+```
+
+| セクション | 内容 |
+|---|---|
+| 1. environment | OS・入出力エンコーディングの一致 |
+| 2. console line-input | Ctrl-V 貼り付けが効く状態か（Windows） |
+| 3. input encoding | 実際のコンソールで日本語が往復するか |
+| 4. input buffer | 254 文字の壁がないか |
+| 5. TLS | TLS 1.2 以上が有効で、ハンドラに適用できるか |
+
+```
+Result: 18 passed, 2 skipped
+```
+
+単体テストで確認できるものは `dotnet test` に移してあるので、ここは最小限です。
 
 ## 開発ルール
 
@@ -1073,7 +1065,7 @@ dotnet format tau-cli.csproj --verify-no-changes
 1. `dotnet format` で整形
 2. `dotnet build -c Release` が **警告 0・エラー 0**
 3. `dotnet test` がすべて通る
-4. `python3 test_tau.py` がすべて通る（実行時回帰）
+4. `tau.exe --test=offline` がすべて通る（実機診断）
 
 ## CI / リリース
 
@@ -1202,8 +1194,8 @@ tau-cli/  (= リポジトリ直下)
     SelfTest.cs             --test 自己診断テスト
   build.bat         ビルド（Windows / CP932・CRLF）
   run.bat           起動
-  test_tau.py       実行時回帰テスト
-  tests/            dotnet test 用の単体テスト(xunit)
+  tests/            dotnet test 用のテスト(xunit)
+    MockLlm.cs / TauRunner.cs   実行時テストの補助
   .github/workflows/build.yml  CI(テスト・自己診断・リリース)
   diag_input.bat    入力まわりの診断
   README.md         このファイル
@@ -1235,6 +1227,5 @@ tau/                 ← このリポジトリ
 ├── src/             ソース（クラスごとに 1 ファイル）
 │   └── www/         --web の画面（実行ファイルに埋め込む）
 ├── build.bat / run.bat / tau-cli.csproj
-├── test_tau.py
 └── tests/           dotnet test 用の単体テスト
 ```
