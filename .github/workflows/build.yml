@@ -137,35 +137,11 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------------
-  #  tau-web (Web UI 版) も壊れていないか確認する
-  # ---------------------------------------------------------------------
-  tau-web:
-    name: tau-web consistency
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      - name: Consistency check
-        run: python3 check_consistency.py
-        working-directory: tau-web
-
-  # ---------------------------------------------------------------------
   #  GitHub Release: タグ push 時のみ
   # ---------------------------------------------------------------------
   release:
     name: release
-    needs: [build, selftest, tau-web]
+    needs: [build, selftest]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
 

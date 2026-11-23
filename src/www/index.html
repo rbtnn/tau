@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tau</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1f2328;
+    --dim: #6e7781;
+    --line: #d8dee4;
+    --panel: #f6f8fa;
+    --accent: #0969da;
+    --think: #8250df;
+    --user-bg: #f0f6ff;
+    --code-bg: #f6f8fa;
+    --danger: #cf222e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117;
+      --fg: #e6edf3;
+      --dim: #8b949e;
+      --line: #30363d;
+      --panel: #161b22;
+      --accent: #58a6ff;
+      --think: #bc8cff;
+      --user-bg: #121d2f;
+      --code-bg: #161b22;
+      --danger: #f85149;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex; flex-direction: column;
+    background: var(--bg); color: var(--fg);
+    font: 14px/1.6 -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+  }
+
+  header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 14px; border-bottom: 1px solid var(--line);
+    background: var(--panel); flex: 0 0 auto;
+  }
+  header .brand { font-weight: 700; letter-spacing: .02em; }
+  header .spacer { flex: 1; }
+  header .status { color: var(--dim); font-size: 12px; }
+  select, button {
+    font: inherit; color: var(--fg); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px;
+    padding: 4px 8px;
+  }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  #sessionList { max-width: 340px; }
+
+  main { flex: 1 1 auto; overflow-y: auto; padding: 18px 0; }
+  #log { max-width: 860px; margin: 0 auto; padding: 0 18px; }
+
+  .msg { margin: 0 0 18px; }
+  .msg .who { font-size: 11px; color: var(--dim); margin-bottom: 3px; }
+  .msg.user .body {
+    background: var(--user-bg); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 12px;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .msg.assistant .body { white-space: pre-wrap; word-break: break-word; }
+  .msg .think {
+    color: var(--think); font-size: 12.5px; border-left: 2px solid var(--think);
+    padding-left: 8px; margin-bottom: 6px; white-space: pre-wrap; opacity: .9;
+  }
+  .msg .tool {
+    color: var(--dim); font-size: 12px; margin: 4px 0;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  }
+  .msg .body pre {
+    background: var(--code-bg); border: 1px solid var(--line);
+    border-radius: 6px; padding: 10px; overflow-x: auto; margin: 8px 0;
+  }
+  .msg .body code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12.5px; }
+  .msg .body :not(pre) > code {
+    background: var(--code-bg); padding: 1px 4px; border-radius: 4px;
+  }
+  .sys { color: var(--dim); font-size: 12.5px; margin: 6px 0; }
+  .err { color: var(--danger); }
+
+  footer { flex: 0 0 auto; border-top: 1px solid var(--line); background: var(--panel); padding: 10px 14px; }
+  #composer { max-width: 860px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; }
+  #input {
+    flex: 1; resize: none; min-height: 44px; max-height: 40vh;
+    font: inherit; color: var(--fg); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px;
+  }
+  #input:focus { outline: none; border-color: var(--accent); }
+  #send { height: 44px; padding: 0 18px; }
+  .hint { max-width: 860px; margin: 6px auto 0; color: var(--dim); font-size: 11.5px; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="brand">tau</span>
+  <select id="sessionList" title="セッションを切り替える"></select>
+  <button id="newSession" title="新しいセッションを開始">＋ 新規</button>
+  <span class="spacer"></span>
+  <span class="status" id="status">ready</span>
+</header>
+
+<main><div id="log"></div></main>
+
+<footer>
+  <div id="composer">
+    <textarea id="input" rows="1" placeholder="メッセージを入力 (Enter で送信 / Shift+Enter で改行)"></textarea>
+    <button id="send">送信</button>
+  </div>
+  <div class="hint">設定は tau-cli の tau.json を使います。ここからは変更できません。</div>
+</footer>
+
+<script>
+"use strict";
+
+var el = function (id) { return document.getElementById(id); };
+var log = el("log"), input = el("input"), sendBtn = el("send");
+var sessionList = el("sessionList"), newBtn = el("newSession"), statusEl = el("status");
+
+var currentSession = "";
+var busy = false;
+
+// ---------------- 表示の補助 ----------------
+
+function scrollToEnd() {
+  var m = document.querySelector("main");
+  m.scrollTop = m.scrollHeight;
+}
+
+function setStatus(t) { statusEl.textContent = t; }
+
+function setBusy(v) {
+  busy = v;
+  sendBtn.disabled = v;
+  newBtn.disabled = v;
+  sessionList.disabled = v;
+  setStatus(v ? "thinking..." : "ready");
+}
+
+function clearLog() { log.innerHTML = ""; }
+
+// 本文中の Markdown のうち、よく使うものだけを最小限で描画する
+function renderMarkdown(text) {
+  var esc = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  var out = "";
+  var parts = esc.split(/```/);
+  for (var i = 0; i < parts.length; i++) {
+    if (i % 2 === 1) {
+      var code = parts[i].replace(/^[a-zA-Z0-9_+-]*\n/, "");
+      out += "<pre><code>" + code.replace(/\n$/, "") + "</code></pre>";
+    } else {
+      var t = parts[i];
+      t = t.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+      t = t.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+      t = t.replace(/(^|\n)### (.+)/g, "$1<strong>$2</strong>");
+      t = t.replace(/(^|\n)## (.+)/g, "$1<strong>$2</strong>");
+      t = t.replace(/(^|\n)# (.+)/g, "$1<strong>$2</strong>");
+      out += t;
+    }
+  }
+  return out;
+}
+
+function addMessage(role, text) {
+  var wrap = document.createElement("div");
+  wrap.className = "msg " + role;
+  var who = document.createElement("div");
+  who.className = "who";
+  who.textContent = role === "user" ? "あなた" : "tau";
+  var body = document.createElement("div");
+  body.className = "body";
+  if (role === "user") body.textContent = text;
+  else body.innerHTML = renderMarkdown(text);
+  wrap.appendChild(who);
+  wrap.appendChild(body);
+  log.appendChild(wrap);
+  scrollToEnd();
+  return wrap;
+}
+
+function addSystem(text, isError) {
+  var d = document.createElement("div");
+  d.className = "sys" + (isError ? " err" : "");
+  d.textContent = text;
+  log.appendChild(d);
+  scrollToEnd();
+  return d;
+}
+
+// ---------------- セッション ----------------
+
+function loadSessions(selectId) {
+  return fetch("/api/sessions")
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d || !d.ok) return;
+      var cur = selectId || currentSession;
+      sessionList.innerHTML = "";
+      (d.sessions || []).forEach(function (s) {
+        var o = document.createElement("option");
+        o.value = s.id;
+        o.textContent = (s.title || "(no title)") + "  (" + (s.count || 0) + ")";
+        if (s.id === cur) o.selected = true;
+        sessionList.appendChild(o);
+      });
+      if (!cur && d.sessions && d.sessions.length) {
+        currentSession = d.sessions[0].id;
+        sessionList.value = currentSession;
+      }
+    });
+}
+
+function openSession(id) {
+  currentSession = id;
+  clearLog();
+  return fetch("/api/sessions/" + encodeURIComponent(id))
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d || !d.ok) { addSystem("セッションを開けませんでした: " + (d && d.message), true); return; }
+      if (!d.messages || !d.messages.length) {
+        addSystem("新しいセッションです。");
+      }
+      (d.messages || []).forEach(function (m) {
+        if (m.role !== "user" && m.role !== "assistant") return;
+        var wrap = addMessage(m.role, m.content || "");
+        if (m.think) {
+          var th = document.createElement("div");
+          th.className = "think";
+          th.textContent = m.think;
+          wrap.insertBefore(th, wrap.querySelector(".body"));
+        }
+        if (m.steps && m.steps.length) {
+          var body = wrap.querySelector(".body");
+          m.steps.forEach(function (s) {
+            var td = document.createElement("div");
+            td.className = "tool";
+            td.textContent = "▶ " + s;
+            wrap.insertBefore(td, body);
+          });
+        }
+      });
+      scrollToEnd();
+    });
+}
+
+// ---------------- 送信 (SSE) ----------------
+
+function parseSseChunk(buf, onEvent) {
+  var idx;
+  while ((idx = buf.indexOf("\n\n")) >= 0) {
+    var block = buf.slice(0, idx);
+    buf = buf.slice(idx + 2);
+    var ev = "message", data = "";
+    block.split("\n").forEach(function (line) {
+      if (line.indexOf("event:") === 0) ev = line.slice(6).trim();
+      else if (line.indexOf("data:") === 0) data += line.slice(5).trim();
+    });
+    if (data) onEvent(ev, data);
+  }
+  return buf;
+}
+
+function send() {
+  var text = input.value.trim();
+  if (!text || busy) return;
+  input.value = "";
+  autoGrow();
+
+  addMessage("user", text);
+  setBusy(true);
+
+  // 応答用の入れ物を先に作る
+  var wrap = document.createElement("div");
+  wrap.className = "msg assistant";
+  var who = document.createElement("div");
+  who.className = "who";
+  who.textContent = "tau";
+  var body = document.createElement("div");
+  body.className = "body";
+  wrap.appendChild(who);
+  wrap.appendChild(body);
+  log.appendChild(wrap);
+  scrollToEnd();
+
+  var thinkEl = null, thinkText = "";
+  var bodyText = "";
+  var gotAny = false;
+
+  fetch("/api/chat/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message: text, session: currentSession })
+  }).then(function (res) {
+    if (!res.ok || !res.body) throw new Error("HTTP " + res.status);
+    var reader = res.body.getReader();
+    var dec = new TextDecoder("utf-8");
+    var buf = "";
+
+    function pump() {
+      return reader.read().then(function (r) {
+        if (r.done) return;
+        buf += dec.decode(r.value, { stream: true });
+        buf = parseSseChunk(buf, function (ev, data) {
+          var obj = {};
+          try { obj = JSON.parse(data); } catch (e) { return; }
+
+          if (ev === "delta") {
+            gotAny = true;
+            bodyText += obj.t || "";
+            body.innerHTML = renderMarkdown(bodyText);
+            scrollToEnd();
+          } else if (ev === "think") {
+            gotAny = true;
+            thinkText += obj.t || "";
+            if (!thinkEl) {
+              thinkEl = document.createElement("div");
+              thinkEl.className = "think";
+              wrap.insertBefore(thinkEl, body);
+            }
+            thinkEl.textContent = thinkText;
+            scrollToEnd();
+          } else if (ev === "tool") {
+            gotAny = true;
+            var td = document.createElement("div");
+            td.className = "tool";
+            td.textContent = "▶ Tool: " + (obj.name || "") + (obj.detail ? "  " + obj.detail : "");
+            wrap.insertBefore(td, body);
+            scrollToEnd();
+          } else if (ev === "log") {
+            var t = (obj.t || "").replace(/\u001b\[[0-9;]*m/g, "").trim();
+            if (t) addSystem(t);
+          } else if (ev === "error") {
+            addSystem("エラー: " + (obj.message || "unknown"), true);
+          } else if (ev === "done") {
+            if (obj.session && obj.session !== currentSession) {
+              currentSession = obj.session;
+            }
+            if (obj.title) {
+              loadSessions(currentSession);
+            }
+          }
+        });
+        return pump();
+      });
+    }
+    return pump();
+  }).catch(function (e) {
+    addSystem("接続に失敗しました: " + e.message, true);
+  }).then(function () {
+    if (!gotAny && !bodyText) {
+      // 何も返らなかった場合は空の応答ブロックを消す
+      if (!wrap.querySelector(".tool") && !thinkEl) wrap.remove();
+    }
+    setBusy(false);
+    loadSessions(currentSession);
+    input.focus();
+  });
+}
+
+// ---------------- 入力欄 ----------------
+
+function autoGrow() {
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, window.innerHeight * 0.4) + "px";
+}
+
+input.addEventListener("input", autoGrow);
+input.addEventListener("keydown", function (e) {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    send();
+  }
+});
+
+sendBtn.addEventListener("click", send);
+
+newBtn.addEventListener("click", function () {
+  if (busy) return;
+  // 新規セッションは、最初の送信時に作られる。
+  // ここでは画面だけ切り替える。
+  currentSession = "";
+  clearLog();
+  addSystem("新しいセッションです。メッセージを送ると作成されます。");
+  sessionList.value = "";
+  input.focus();
+});
+
+sessionList.addEventListener("change", function () {
+  if (busy) return;
+  openSession(sessionList.value);
+});
+
+// ---------------- 起動 ----------------
+
+loadSessions().then(function () {
+  if (currentSession) openSession(currentSession);
+  else addSystem("新しいセッションです。");
+  input.focus();
+});
+</script>
+</body>
+</html>

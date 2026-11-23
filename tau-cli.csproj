@@ -37,6 +37,8 @@
 
   <ItemGroup>
     <Compile Include="src/**/*.cs" />
+    <!-- web 画面を実行ファイルに埋め込む(単一ファイル配布のため) -->
+    <EmbeddedResource Include="src/www/index.html" />
   </ItemGroup>
 
   <!-- テストから内部クラス(Json など)を参照できるようにする -->

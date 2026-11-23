@@ -44,6 +44,8 @@ namespace Tau
             bool version = false;
             bool selfTest = false;
             bool selfTestOffline = false;
+            bool web = false;
+            int webPort = 8080;
 
             for (int i = 0; i < args.Length; i++)
             {
@@ -60,6 +62,10 @@ namespace Tau
                 else if (a == "--test") selfTest = true;
                 else if (a == "--test=offline") { selfTest = true; selfTestOffline = true; }
                 else if (a == "--test-offline") { selfTest = true; selfTestOffline = true; }
+                else if (a == "--web") web = true;
+                else if (a.StartsWith("--web=")) { web = true; ParsePort(a.Substring("--web=".Length), ref webPort); }
+                else if (a == "--port" && i + 1 < args.Length) { ParsePort(args[++i], ref webPort); }
+                else if (a.StartsWith("--port=")) ParsePort(a.Substring("--port=".Length), ref webPort);
             }
 
             if (version) { PrintVersion(); return; }
@@ -115,6 +121,11 @@ namespace Tau
                 Environment.ExitCode = code;
                 return;
             }
+
+            // --web: ブラウザ用の最小 HTTP サーバで起動する。
+            // 設定は tau-cli の tau.json をそのまま使い、画面からは
+            // チャットとセッション切替だけができる。
+            if (web) { RunWeb(cfg, webPort, sessionArg); return; }
 
             Chat chat = new Chat(cfg);
             chat.Run(sessionArg);
@@ -482,6 +493,49 @@ namespace Tau
         // ビルド識別子。古い tau.exe を動かしていないか確認できるようにする。
         public const string BuildStamp = "2026-11-23 dotnet10+json";
 
+        // --web の起動。Ctrl-C で止まるまで動き続ける。
+        static void RunWeb(Config cfg, int port, string sessionArg)
+        {
+            WebServer server = new(cfg);
+            try
+            {
+                server.Start(port);
+            }
+            catch (Exception ex)
+            {
+                ConsoleUi.Danger("Could not start the web server: " + ex.Message + "\n");
+                Environment.ExitCode = 1;
+                return;
+            }
+
+            ConsoleUi.Banner(cfg, null, false);
+            ConsoleUi.Info("Web UI: " + server.Url);
+            ConsoleUi.Dim("  Settings come from " + cfg.ConfigPath + " (read-only from the browser)\n");
+            ConsoleUi.Dim("  Press Ctrl-C to stop\n");
+
+            // 指定セッションがあれば「最後に開いていたセッション」として記録する
+            if (!string.IsNullOrWhiteSpace(sessionArg))
+            {
+                SessionStore store = new();
+                if (store.Load(sessionArg) != null) store.SetLastSessionId(sessionArg);
+            }
+
+            ManualResetEventSlim stop = new(false);
+            Console.CancelKeyPress += (s, e) =>
+            {
+                e.Cancel = true;   // プロセスを即殺させない
+                stop.Set();
+            };
+            stop.Wait();
+            server.Stop();
+            ConsoleUi.Dim("\n  stopped\n");
+        }
+
+        static void ParsePort(string s, ref int port)
+        {
+            if (int.TryParse((s ?? "").Trim(), out int p) && p >= 1 && p <= 65535) port = p;
+        }
+
         internal static void PrintVersion()
         {
             Console.WriteLine("tau " + BuildStamp);
@@ -523,6 +577,8 @@ namespace Tau
             Console.WriteLine("  --diag             Run a connection diagnostic (TLS/HTTP) and exit");
             Console.WriteLine("  --test             Run the built-in self test (includes an API request)");
             Console.WriteLine("  --test=offline     Run the self test without any network request");
+            Console.WriteLine("  --web              Serve a minimal web UI in the browser (emergency use)");
+            Console.WriteLine("  --port <n>         Port for --web (default 8080, picks a free one if taken)");
             Console.WriteLine("  --debug            Enable debug output (same as TAU_DEBUG=1)");
             Console.WriteLine("  --help, -h, /?     Show this help");
             Console.WriteLine();

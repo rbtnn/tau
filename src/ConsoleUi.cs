@@ -37,10 +37,37 @@ namespace Tau
             catch { return false; }
         }
 
+        // ---- 出力先の差し替え ----
+        //
+        // 通常はコンソールへ書く。--web のときは WebUi がここを差し替え、
+        // 同じ文字列を SSE のログイベントとして流す。
+        // 呼び出し側 (200 箇所以上) は一切変更しなくて済む。
+        static Action<string> sink;
+
+        /// <summary>出力先を差し替える。null を渡すとコンソールに戻る。</summary>
+        public static void SetSink(Action<string> writer, bool useColor)
+        {
+            sink = writer;
+            color = useColor;
+        }
+
+        public static void ResetSink()
+        {
+            sink = null;
+            color = DetectColor();
+        }
+
+        static void Raw(string s)
+        {
+            Action<string> w = sink;
+            if (w != null) { w(s); return; }
+            try { Console.Write(s); } catch { }
+        }
+
         static void Write(string code, string s)
         {
-            if (color) Console.Write("\u001b[" + code + "m" + s + "\u001b[0m");
-            else Console.Write(s);
+            if (color) Raw("\u001b[" + code + "m" + s + "\u001b[0m");
+            else Raw(s);
         }
 
         public static void Dim(string s) { Write("90", s); }
@@ -52,35 +79,35 @@ namespace Tau
 
         public static void Info(string s)
         {
-            Console.Write("  ");
+            Raw("  ");
             Dim("· " + s);
-            Console.Write("\n");
+            Raw("\n");
         }
 
         // ツール実行の 1 行表示
         public static void Tool(string name, string detail)
         {
-            Console.Write("  ");
+            Raw("  ");
             Dim("▶ Tool: ");
             Accent(name + (detail.Length > 0 ? ("  " + detail) : ""));
-            Console.Write("\n");
+            Raw("\n");
         }
 
         public static void Banner(Config cfg, SessionCtx ctx, bool resumed)
         {
-            Console.WriteLine();
+            Raw("\n");
             Bold("tau");
             Muted(" - console AI agent");
-            Console.WriteLine();
-            Console.WriteLine("  Model  : " + cfg.Model);
-            Console.WriteLine("  Tools  : " + (cfg.AllowTools ? "on" : "off"));
-            Console.WriteLine("  Config : " + cfg.ConfigPath);
+            Raw("\n");
+            Raw("  Model  : " + cfg.Model + "\n");
+            Raw("  Tools  : " + (cfg.AllowTools ? "on" : "off") + "\n");
+            Raw("  Config : " + cfg.ConfigPath + "\n");
             if (ctx != null)
-                Console.WriteLine("  Session: " + ctx.Id + "  (" + ctx.Title + ")"
-                    + (resumed ? "  (resumed)" : ""));
-            Console.WriteLine();
-            Dim("  /help for commands, /exit to quit");
-            Console.WriteLine();
+                Raw("  Session: " + ctx.Id + "  (" + ctx.Title + ")"
+                    + (resumed ? "  (resumed)" : "") + "\n");
+            Raw("\n");
+            Dim("  /help for commands, /exit to quit\n");
+            Raw("\n");
         }
     }
 

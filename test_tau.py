@@ -14,7 +14,7 @@
     python3 test_tau.py
 """
 import glob, json, os, re, shutil, socket, subprocess, sys, tempfile, threading, time
-import urllib.request
+import urllib.error, urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -1088,6 +1088,193 @@ def main():
         ok("本文は単独の行から始まります")
     else:
         bad("本文が前の出力に連結しています: %r" % reply_lines[:2])
+
+    # ---- 6d-2. --web (最小構成の Web UI) ----
+    # サーバを別プロセスで起動し、HTTP で叩いて確認する。
+    web_port = free_port()
+    web_cfg = os.path.join(work, "web.json")
+    with open(web_cfg, "w", encoding="utf-8") as f:
+        json.dump({"llmApiUrl": "http://127.0.0.1:%d/v1/chat/completions" % port,
+                   "llmApiKey": "k", "model": "m", "allowTools": False,
+                   "emitReasoning": True, "useSystemProxy": False}, f)
+
+    web_env = dict(env)
+    web_proc = subprocess.Popen(
+        tau_cmd(["--web", "--port", str(web_port), "--config", web_cfg]),
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, env=web_env, cwd=HERE)
+    base = "http://127.0.0.1:%d" % web_port
+
+    def web_get(path, timeout=10):
+        req = urllib.request.Request(base + path)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, r.read().decode("utf-8")
+
+    def web_post(path, body, timeout=60):
+        data = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(base + path, data=data, method="POST",
+                                     headers={"Content-Type": "application/json",
+                                              "Origin": base})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, r.read().decode("utf-8")
+
+    # 起動を待つ
+    started = False
+    for _ in range(60):
+        try:
+            st, _body = web_get("/api/health", timeout=2)
+            if st == 200:
+                started = True
+                break
+        except Exception:
+            time.sleep(0.25)
+    if started:
+        ok("--web で Web サーバが起動します (port %d)" % web_port)
+    else:
+        bad("--web のサーバが起動しません")
+
+    if started:
+        # 画面
+        try:
+            st, html = web_get("/")
+            if st == 200 and "id=\"composer\"" in html and "id=\"sessionList\"" in html:
+                ok("--web がチャット画面を返します")
+            else:
+                bad("画面の内容が想定と違います: status=%s" % st)
+        except Exception as ex:
+            bad("画面を取得できません: %s" % ex)
+
+        # 設定変更のエンドポイントが無いこと(要件: 設定画面は不要)
+        for p_ in ("/api/config", "/api/model", "/api/tools", "/api/ui"):
+            try:
+                web_post(p_, {})
+                bad("設定用のエンドポイント %s が存在します(要件外)" % p_)
+            except urllib.error.HTTPError as ex:
+                if ex.code in (404, 405):
+                    ok("設定用のエンドポイント %s はありません" % p_)
+                else:
+                    bad("%s が想定外の応答: %s" % (p_, ex.code))
+            except Exception:
+                ok("設定用のエンドポイント %s はありません" % p_)
+
+        # セッション一覧
+        try:
+            st, body = web_get("/api/sessions")
+            d = json.loads(body)
+            if st == 200 and d.get("ok") and isinstance(d.get("sessions"), list):
+                ok("--web のセッション一覧が返ります")
+            else:
+                bad("セッション一覧の形式が違います: %s" % body[:200])
+        except Exception as ex:
+            bad("セッション一覧を取得できません: %s" % ex)
+
+        # チャット (SSE)
+        try:
+            st, sse = web_post("/api/chat/stream", {"message": "Webからのテスト", "session": ""})
+            events = []
+            for block in sse.split("\n\n"):
+                if not block.strip():
+                    continue
+                ev, data = "message", ""
+                for line in block.split("\n"):
+                    if line.startswith("event:"):
+                        ev = line[6:].strip()
+                    elif line.startswith("data:"):
+                        data += line[5:].strip()
+                if data:
+                    events.append((ev, json.loads(data)))
+            names = [e for e, _ in events]
+            if "delta" in names and "done" in names:
+                ok("--web のチャットが SSE で本文を返します")
+            else:
+                bad("SSE のイベントが不足: %r" % names)
+
+            done = [d for e, d in events if e == "done"]
+            sid = done[-1].get("session", "") if done else ""
+            if sid:
+                ok("--web のチャットがセッション ID を返します")
+            else:
+                bad("done に session がありません")
+
+            if "think" in names:
+                ok("--web が思考(reasoning)も配信します")
+            else:
+                bad("思考イベントがありません: %r" % names)
+
+            # 履歴の取得(セッション切替の土台)
+            if sid:
+                st, body = web_get("/api/sessions/" + urllib.parse.quote(sid))
+                d = json.loads(body)
+                roles = [m.get("role") for m in d.get("messages", [])]
+                if st == 200 and "user" in roles and "assistant" in roles:
+                    ok("--web でセッションの履歴を取得できます")
+                else:
+                    bad("履歴の内容が想定と違います: %s" % body[:200])
+                if d.get("messages") and d["messages"][-1].get("think"):
+                    ok("--web の履歴に思考が含まれます")
+                else:
+                    bad("履歴に思考がありません")
+        except Exception as ex:
+            bad("--web のチャットに失敗: %s" % ex)
+
+        # 別オリジンからの POST は拒否されること(CSRF 対策)
+        try:
+            data = json.dumps({"message": "x"}).encode()
+            req = urllib.request.Request(base + "/api/chat/stream", data=data,
+                                         method="POST",
+                                         headers={"Content-Type": "application/json",
+                                                  "Origin": "http://evil.example"})
+            urllib.request.urlopen(req, timeout=10)
+            bad("別オリジンからの POST が通ってしまいます")
+        except urllib.error.HTTPError as ex:
+            if ex.code == 403:
+                ok("別オリジンからの POST は 403 で拒否されます")
+            else:
+                bad("別オリジンの応答が想定外: %s" % ex.code)
+        except Exception:
+            ok("別オリジンからの POST は拒否されます")
+
+        # 存在しないエンドポイント
+        try:
+            web_get("/api/nope")
+            bad("存在しないパスが 200 を返します")
+        except urllib.error.HTTPError as ex:
+            if ex.code == 404:
+                ok("存在しないパスは 404 になります")
+            else:
+                bad("404 になりません: %s" % ex.code)
+        except Exception:
+            ok("存在しないパスはエラーになります")
+
+        # 空メッセージは拒否
+        try:
+            st, sse = web_post("/api/chat/stream", {"message": "   ", "session": ""})
+            if '"code":"bad_request"' in sse or '"code": "bad_request"' in sse:
+                ok("--web は空のメッセージを拒否します")
+            else:
+                bad("空メッセージが拒否されません: %s" % sse[:200])
+        except Exception as ex:
+            bad("空メッセージの確認に失敗: %s" % ex)
+
+        # 設定ファイルは tau-cli のものを参照(web 専用の設定は作らない)
+        if not os.path.exists(os.path.join(appdata, "tau-web.json")):
+            ok("--web は tau-web.json を作りません")
+        else:
+            bad("--web が tau-web.json を作っています")
+
+    # サーバを止める
+    try:
+        web_proc.terminate()
+        web_proc.wait(timeout=10)
+    except Exception:
+        try:
+            web_proc.kill()
+        except Exception:
+            pass
+    if web_proc.poll() is not None:
+        ok("--web のサーバを停止できます")
+    else:
+        bad("--web のサーバが停止しません")
 
     # ---- 6e. 設定コマンド ----
     out = run_tau("/config\n/exit\n")
