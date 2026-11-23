@@ -188,6 +188,46 @@ namespace Tau
             }
         }
 
+        /// <summary>
+        /// コマンドラインから 1 項目だけ変更する(--config set)。
+        /// 成功なら true。
+        /// </summary>
+        public static bool Set(Config cfg, string key, string value)
+        {
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                ConsoleUi.Danger("Usage: --config set <key> <value>\n");
+                ConsoleUi.Dim("  See --config show for the list of keys\n");
+                return false;
+            }
+
+            Field f = Find(key);
+            if (f == null)
+            {
+                ConsoleUi.Danger("Unknown setting: " + key + "\n");
+                ConsoleUi.Dim("  Use --config show to list the settings\n");
+                return false;
+            }
+
+            if ((value ?? "").Trim().Length == 0 && f.Kind != "string" && f.Kind != "secret")
+            {
+                ConsoleUi.Dim("  Current value: " + Display(cfg, f) + "\n");
+                ConsoleUi.Dim("  Usage: --config set " + f.Key + " <value>\n");
+                return false;
+            }
+
+            if (!Apply(cfg, f, value))
+            {
+                ConsoleUi.Danger("Invalid value: " + value + "\n");
+                ConsoleUi.Dim("  Current value: " + Display(cfg, f) + "\n");
+                return false;
+            }
+
+            cfg.Save();
+            ConsoleUi.Info(f.Key + " = " + Display(cfg, f) + "  (updated)");
+            return true;
+        }
+
         // 現在の設定を表示する
         public static void Show(Config cfg)
         {
@@ -199,7 +239,7 @@ namespace Tau
                 Console.WriteLine("    " + Pad(f.Key) + " = " + Display(cfg, f));
             }
             Console.WriteLine();
-            ConsoleUi.Dim("  Change: /set <key> <value>   or   /config edit\n");
+            ConsoleUi.Dim("  Change: --config set <key> <value>   or   --config edit\n");
         }
 
         static string Pad(string s)

@@ -177,7 +177,7 @@ namespace Tau.Tests
             string id = Json.AsString(s["id"]);
 
             llm.ClearRequests();
-            string output = runner.Run("", new[] { "--session", id, "--config", runner.ConfigPath });
+            string output = runner.Run("", new[] { "--open", id, "--config", runner.ConfigPath });
 
             Assert.Empty(llm.Requests);
             Assert.Contains("最初の質問", output);

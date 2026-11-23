@@ -155,7 +155,7 @@ namespace Tau.Tests
         public void SessionsShowsNumbersAndHint()
         {
             runner.Run("会話\n/exit\n");
-            string output = runner.Run("/sessions\n/exit\n");
+            string output = runner.Run("/list\n/exit\n");
             Assert.Contains("1.", output);
             Assert.Contains("/delete", output);
             Assert.Contains("/open", output);
@@ -167,7 +167,7 @@ namespace Tau.Tests
             runner.Run("会話1\n/exit\n");
             runner.Run("/new\n会話2\n/exit\n");
 
-            string sessions = runner.Run("/sessions\n/exit\n");
+            string sessions = runner.Run("/list\n/exit\n");
             // 一覧の 1 番目の ID を取り出す
             string firstId = "";
             foreach (string line in sessions.Split('\n'))
@@ -218,8 +218,8 @@ namespace Tau.Tests
         public void HelpShowsNumberOrIdForOpenAndDelete()
         {
             string output = runner.Run("/help\n/exit\n");
-            Assert.Contains("/open <n|id>", output);
-            Assert.Contains("/delete <n|id>", output);
+            Assert.Contains("/o[pen] <n|id>", output);
+            Assert.Contains("/d[elete] <n|id>", output);
         }
 
         [Fact]
@@ -233,7 +233,7 @@ namespace Tau.Tests
             Assert.Equal(before, runner.SessionFiles().Length);
         }
 
-        // /sessions の表示から (番号, ID) を取り出す。
+        // /list の表示から (番号, ID) を取り出す。
         static List<(int num, string id)> ParseSessions(string output)
         {
             List<(int, string)> list = new();
@@ -262,8 +262,8 @@ namespace Tau.Tests
             // 表示中のセッションを消すと代替が作られて件数が変わらないため、
             // 表示中ではないセッションを消す。
             // ファイルの並びは ID(時刻 + GUID)依存で不安定なので、
-            // /sessions の表示から ID を取る。
-            string listing = runner.Run("/sessions\n/exit\n");
+            // /list の表示から ID を取る。
+            string listing = runner.Run("/list\n/exit\n");
             List<(int num, string id)> sessions = ParseSessions(listing);
             Assert.True(sessions.Count >= 2, "need at least 2 sessions:\n" + listing);
 

@@ -225,8 +225,12 @@ namespace Tau.Tests
         public void HelpListsOptions()
         {
             string output = runner.Run("", new[] { "--help" });
-            Assert.Contains("--config", output);
-            Assert.Contains("--session", output);
+            Assert.Contains("--config show", output);
+            Assert.Contains("--config set", output);
+            Assert.Contains("--config edit", output);
+            Assert.Contains("--new", output);
+            Assert.Contains("--open", output);
+            Assert.Contains("--list", output);
             Assert.Contains("--web", output);
             Assert.Contains("--test", output);
         }

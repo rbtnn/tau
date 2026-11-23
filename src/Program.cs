@@ -38,26 +38,58 @@ namespace Tau
             SetupConsoleEncoding(null);
 
             string configPath = "";
-            string sessionArg = "";
+            string sessionArg = "";       // --open で開くセッション
+            bool newSession = false;      // --new
             bool help = false;
-            bool diag = false;
             bool version = false;
             bool selfTest = false;
             bool selfTestOffline = false;
             bool web = false;
             int webPort = 8080;
+            bool configShow = false;
+            bool configEdit = false;
+            string configSetKey = null;
+            string configSetValue = null;
 
             for (int i = 0; i < args.Length; i++)
             {
                 string a = (args[i] ?? "").Trim();
-                if (a == "--config" && i + 1 < args.Length) configPath = args[++i].Trim();
+
+                // --config show / --config edit / --config set <k> <v> /
+                // --config <path> の 4 通り。
+                if (a == "--config")
+                {
+                    if (i + 1 >= args.Length) { configShow = true; }
+                    else
+                    {
+                        string sub = (args[i + 1] ?? "").Trim();
+                        if (sub == "show") { configShow = true; i++; }
+                        else if (sub == "edit") { configEdit = true; i++; }
+                        else if (sub == "set")
+                        {
+                            if (i + 3 < args.Length)
+                            {
+                                configSetKey = (args[i + 2] ?? "").Trim();
+                                configSetValue = (args[i + 3] ?? "").Trim();
+                                i += 3;
+                            }
+                            else
+                            {
+                                ConsoleUi.Danger("Usage: --config set <key> <value>\n");
+                                Environment.ExitCode = 1;
+                                return;
+                            }
+                        }
+                        else { configPath = sub; i++; }   // 従来のパス指定
+                    }
+                }
                 else if (a.StartsWith("--config=")) configPath = a.Substring("--config=".Length);
-                else if (a == "--session" && i + 1 < args.Length) sessionArg = args[++i].Trim();
-                else if (a.StartsWith("--session=")) sessionArg = a.Substring("--session=".Length);
+                else if (a == "--open" && i + 1 < args.Length) sessionArg = args[++i].Trim();
+                else if (a.StartsWith("--open=")) sessionArg = a.Substring("--open=".Length);
+                else if (a == "--new") newSession = true;
                 else if (a == "--help" || a == "-h" || a == "/?") help = true;
                 else if (a == "--list") { ListSessions(configPath); return; }
                 else if (a == "--debug") LlmClient.EnableDebug();
-                else if (a == "--diag") diag = true;
                 else if (a == "--version" || a == "-v") version = true;
                 else if (a == "--test") selfTest = true;
                 else if (a == "--test=offline") { selfTest = true; selfTestOffline = true; }
@@ -66,6 +98,11 @@ namespace Tau
                 else if (a.StartsWith("--web=")) { web = true; ParsePort(a.Substring("--web=".Length), ref webPort); }
                 else if (a == "--port" && i + 1 < args.Length) { ParsePort(args[++i], ref webPort); }
                 else if (a.StartsWith("--port=")) ParsePort(a.Substring("--port=".Length), ref webPort);
+
+                // 旧オプションの受け皿(互換のため残す)
+                else if (a == "--diag") { selfTest = true; selfTestOffline = false; }
+                else if (a == "--session" && i + 1 < args.Length) sessionArg = args[++i].Trim();
+                else if (a.StartsWith("--session=")) sessionArg = a.Substring("--session=".Length);
             }
 
             if (version) { PrintVersion(); return; }
@@ -112,10 +149,32 @@ namespace Tau
             // ほぼ必ず拒否される。要求のたびに設定するより先に固定しておく。
             LlmClient.ApplyTls();
 
-            if (diag) { Diagnostics.Run(cfg); return; }
+            // --config show / --config edit / --config set
+            // コンソールを立ち上げずに設定だけ扱う。
+            if (configShow)
+            {
+                Settings.Show(cfg);
+                return;
+            }
+            if (configEdit)
+            {
+                Settings.Edit(cfg);
+                return;
+            }
+            if (configSetKey != null)
+            {
+                if (!Settings.Set(cfg, configSetKey, configSetValue))
+                {
+                    Environment.ExitCode = 1;
+                }
+                return;
+            }
 
             if (selfTest)
             {
+                // --test は「接続診断 + 自己診断」。--test=offline では
+                // ネットワークを使う診断を省く。
+                if (!selfTestOffline) Diagnostics.Run(cfg);
                 int code = SelfTest.Run(cfg, !selfTestOffline);
                 try { Console.Out.Flush(); } catch { }
                 Environment.ExitCode = code;
@@ -128,7 +187,7 @@ namespace Tau
             if (web) { RunWeb(cfg, webPort, sessionArg); return; }
 
             Chat chat = new Chat(cfg);
-            chat.Run(sessionArg);
+            chat.Run(sessionArg, newSession);
         }
 
         // 入力エンコーディングを「変更しない」のが原則だが、起動時点で UTF-8 に
@@ -570,31 +629,35 @@ namespace Tau
             Console.WriteLine("tau - AI agent that runs in the console");
             Console.WriteLine();
             Console.WriteLine("Usage: tau.exe [options]");
-            Console.WriteLine("  --config <path>    Path to the config file (tau.json)");
-            Console.WriteLine("  --session <id>     Open an existing session and continue it");
-            Console.WriteLine("  --version          Show the build stamp and exit");
-            Console.WriteLine("  --list             List saved sessions and exit");
-            Console.WriteLine("  --diag             Run a connection diagnostic (TLS/HTTP) and exit");
-            Console.WriteLine("  --test             Run the built-in self test (includes an API request)");
-            Console.WriteLine("  --test=offline     Run the self test without any network request");
-            Console.WriteLine("  --web              Serve a minimal web UI in the browser (emergency use)");
-            Console.WriteLine("  --port <n>         Port for --web (default 8080, picks a free one if taken)");
-            Console.WriteLine("  --debug            Enable debug output (same as TAU_DEBUG=1)");
-            Console.WriteLine("  --help, -h, /?     Show this help");
+            Console.WriteLine("  --version            Show the build stamp and exit");
+            Console.WriteLine("  --config show        Show the current settings");
+            Console.WriteLine("  --config set <k> <v> Change a single setting (e.g. --config set model gpt-4o)");
+            Console.WriteLine("                       The settings contain the path to the config file (tau.json)");
+            Console.WriteLine("  --config edit        Edit settings interactively");
+            Console.WriteLine("  --new                Start a new session");
+            Console.WriteLine("  --open <n/id>        Open an existing session and continue it");
+            Console.WriteLine("  --list               List saved sessions and exit");
+            Console.WriteLine("  --test               Run a connection diagnostic (TLS/HTTP) and the built-in self test");
+            Console.WriteLine("                       (includes an API request)");
+            Console.WriteLine("  --web                Serve a minimal web UI in the browser (emergency use)");
+            Console.WriteLine("  --port <n>           Port for --web (default 8080, picks a free one if taken)");
+            Console.WriteLine("  --debug              Enable debug output (same as TAU_DEBUG=1)");
+            Console.WriteLine("  --help, -h, /?       Show this help");
             Console.WriteLine();
             Console.WriteLine("Commands available while chatting:");
-            Console.WriteLine("  /help            Show this help");
-            Console.WriteLine("  /new             Start a new session");
-            Console.WriteLine("  /sessions        List saved sessions");
-            Console.WriteLine("  /open <n|id>     Open a session by number or id");
-            Console.WriteLine("  /delete <n|id>   Delete a session by number or id");
-            Console.WriteLine("  /clear           Clear the current session's history");
-            Console.WriteLine("  /config          Show the current settings");
-            Console.WriteLine("  /config edit     Edit settings interactively");
-            Console.WriteLine("  /set <k> <v>     Change a single setting (e.g. /set model gpt-4o)");
-            Console.WriteLine("  /model [name]    Show or switch the model");
-            Console.WriteLine("  /tools           Toggle tool execution on/off");
-            Console.WriteLine("  /exit, /quit     Exit (Ctrl+D also works)");
+            Console.WriteLine("  /n[ew]             Start a new session");
+            Console.WriteLine("  /l[ist]            List saved sessions");
+            Console.WriteLine("  /o[pen] <n|id>     Open a session by number or id");
+            Console.WriteLine("  /d[elete] <n|id>   Delete a session by number or id");
+            Console.WriteLine("  /cl[ear]           Clear the current session's history");
+            Console.WriteLine("  /t[ools]           Toggle tool execution on/off");
+            Console.WriteLine("  /m[odel] [name]    Show or switch the model");
+            Console.WriteLine("  /co[nfig] [edit]   Show the settings, or edit them");
+            Console.WriteLine("  /se[t] <k> <v>     Change a single setting (e.g. /set model gpt-4o)");
+            Console.WriteLine("  /h[elp]            Show this help");
+            Console.WriteLine("  /e[xit], /q[uit]   Exit (Ctrl+D also works)");
+            Console.WriteLine();
+            Console.WriteLine("  [ ] marks the optional part, as in Vim help (/n is /new).");
         }
 
         static void ListSessions(string configPath)

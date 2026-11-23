@@ -38,13 +38,35 @@ dotnet publish tau-cli.csproj -c Release -r linux-x64 \
 ```
 tau.exe [オプション]
 
-  --config <path>    設定ファイル（tau.json）のパス
-  --session <id>     既存セッションを開いて続きから対話する
-  --list             保存済みセッションの一覧を表示して終了
-  --diag             接続診断(TLS/HTTP)を実行して終了
-  --debug            デバッグ出力を有効にする（TAU_DEBUG=1 と同じ）
-  --help, -h, /?     ヘルプを表示
+  --version            ビルド識別子を表示して終了
+  --config show        現在の設定を表示
+  --config set <k> <v> 設定を 1 項目だけ変更 (例: --config set model gpt-4o)
+                       設定には設定ファイル(tau.json)のパスも含まれます
+  --config edit        設定を対話形式で変更
+  --new                新しいセッションを開始
+  --open <n/id>        既存セッションを開いて続きから対話する
+  --list               保存済みセッションの一覧を表示して終了
+  --test               接続診断(TLS/HTTP)と自己診断を実行
+                       (実際の API リクエストを含みます)
+  --web                ブラウザ用の最小 Web UI を起動（緊急用）
+  --port <n>           --web のポート (既定 8080、使用中なら空きを選ぶ)
+  --debug              デバッグ出力を有効にする（TAU_DEBUG=1 と同じ）
+  --help, -h, /?       ヘルプを表示
 ```
+
+> `--config <path>` のように**パスを直接渡す**書き方も引き続き使えます。
+
+### 設定をコマンドラインから扱う
+
+```
+tau.exe --config show
+tau.exe --config set model gpt-4o
+tau.exe --config set allowTools true
+tau.exe --config edit
+```
+
+`--config show` は設定ファイルのパスと全項目を表示します。
+`--config set` は 1 項目だけ変更して保存します。`--config edit` は対話形式です。
 
 起動すると、そのまま入力を受け付けます。**前回開いていたセッションが自動で復元**され、
 過去の会話が表示された状態から続きを入力できます。
@@ -61,19 +83,24 @@ tau.exe [オプション]
 
 | コマンド | 説明 |
 |---|---|
-| `/help` | ヘルプを表示 |
-| `/new` | 新しいセッションを開始 |
-| `/sessions` | 保存済みセッションの一覧（番号付き） |
-| `/open <番号\|ID>` | セッションを開く（番号は `/sessions` のもの） |
-| `/delete <番号\|ID>` | セッションを削除（確認あり） |
-| `/model` | 現在のモデルと登録一覧を表示 |
-| `/model <名>` | モデルを切り替え（設定ファイルにも保存） |
-| `/config` | 現在の設定を表示 |
-| `/config edit` | 対話形式で設定を変更 |
-| `/set <key> <value>` | 設定を 1 項目だけ変更 |
-| `/tools` | ツール実行の on/off を切り替え |
-| `/clear` | 現在のセッションの会話履歴をクリア（確認あり） |
-| `/exit`, `/quit` | 終了（`Ctrl+D` でも終了） |
+| `/n[ew]` | 新しいセッションを開始 |
+| `/l[ist]` | 保存済みセッションの一覧（番号付き） |
+| `/o[pen] <n\|id>` | セッションを開く（番号は `/list` のもの） |
+| `/d[elete] <n\|id>` | セッションを削除（確認あり） |
+| `/cl[ear]` | 現在のセッションの会話履歴をクリア（確認あり） |
+| `/t[ools]` | ツール実行の on/off を切り替え |
+| `/m[odel] [名]` | モデルを表示／切り替え（設定ファイルにも保存） |
+| `/co[nfig] [edit]` | 設定を表示／対話形式で変更 |
+| `/se[t] <key> <value>` | 設定を 1 項目だけ変更 |
+| `/h[elp]` | ヘルプを表示 |
+| `/e[xit]`, `/q[uit]` | 終了（`Ctrl+D` でも終了） |
+
+`[ ]` は **Vim のヘルプと同じ書き方**で、省略できる部分を表します。
+`/n` でも `/ne` でも `/new` でも同じコマンドです。
+
+**`/c` は使えません。** `/cl[ear]` と `/co[nfig]` の両方に一致して曖昧なため、
+エラーになります（候補として `/cl` と `/co` を案内します）。
+`/s` は `/se[t]` しか候補が無いので使えます。
 
 ### セッションの内容をクリア
 
@@ -94,10 +121,10 @@ tau.exe [オプション]
 
 ### セッションの削除
 
-`/sessions` で番号付きの一覧が出ます。`*` が現在のセッションです。
+`/list` で番号付きの一覧が出ます。`*` が現在のセッションです。
 
 ```
-> /sessions
+> /list
   保存済みセッション (C:\Users\...\AppData\Roaming\tau\sessions)
    1. s20261109...  Mermaid矢印置換  (12 件)
 *  2. s20261109...  テスト            (4 件)
@@ -130,7 +157,7 @@ tau.exe [オプション]
   · Opened session: s20261109...  (新規会話)
 ```
 
-番号は `/sessions` の表示順（1 始まり）です。範囲外の番号や存在しない ID を
+番号は `/list` の表示順（1 始まり）です。範囲外の番号や存在しない ID を
 指定すると、使い方の案内が出ます。
 
 `%APPDATA%\tau-cli\sessions\` のファイルを直接消しても構いません（`_state.json` は残してください）。
@@ -293,7 +320,7 @@ TAU_CONFIG
 | コマンド | 説明 |
 |---|---|
 | `/config` | 現在の設定を一覧表示（API キーは伏せ字） |
-| `/config edit` | 番号を選んで 1 項目ずつ対話形式で変更 |
+| `--config edit` | 番号を選んで 1 項目ずつ対話形式で変更 |
 | `/set <key> <value>` | 1 項目だけ変更 |
 | `/model [名]` | モデルの表示・切り替え |
 | `/tools` | ツール実行の on/off を切り替え |
@@ -316,7 +343,7 @@ TAU_CONFIG
 > /set contextWindow 128000
   · contextWindow = 128000  に変更しました
 
-> /config edit
+> tau.exe --config edit
   1. llmApiUrl          = https://...
      OpenAI 互換の /chat/completions の URL
   2. llmApiKey          = sk-...********
@@ -360,7 +387,7 @@ tau.json:
 最も安定します。
 
 - 入力が**リダイレクト**されている場合は設定に関係なく触りません（パイプ・ファイル入力）
-- 設定は `/set inputEncoding utf-8` または `/config edit` の **16. Input Encoding** で変更できます
+- 設定は `--config set inputEncoding utf-8` または `--config edit` の **16. Input Encoding** で変更できます
 - `cp932` / `sjis` / `65001` / コードページ番号などの別名も受け付けます
 
 #### 入力が NUL に化けた場合
@@ -375,14 +402,14 @@ tau.json:
   Try one of the following:
    - Run `chcp 65001` before starting tau (or run it in Windows Terminal)
    - Set TAU_DEBUG=1 and check the reported input encoding
-   - Paste the text from a file:  tau --session <id> < input.txt
+   - Paste the text from a file:  tau --open <id> < input.txt
   · input encoding: utf-8 (CP65001)
 ```
 
 一部だけ NUL に化けた場合は、**欠落した文字数を表示**したうえで、
 残りの文字を送信します。
 
-**`/config edit` の複数行入力（システムプロンプトなど）でも同じ対処をします。**
+**`--config edit` の複数行入力（システムプロンプトなど）でも同じ対処をします。**
 以前は NUL で空になった行を「入力終了の空行」と誤判定し、何も入力できていないのに
 即終了して反映されない、という状態になっていました。現在は:
 
@@ -398,7 +425,7 @@ tau.json:
     tau.exe < input.txt
 ```
 
-`tau --diag` でも現在の入出力エンコーディングを確認できます。
+`tau --test` でも現在の入出力エンコーディングを確認できます。
 
 ```
   [environment]
@@ -686,7 +713,7 @@ Windows のコンソールでは `Console.ReadKey()` が IME と組み合わさ�
 
 ```
 chcp                 ← 現在のコードページを確認(932 など)
-/set inputEncoding shift-jis
+--config set inputEncoding shift-jis
 ```
 
 ### 貼り付け（Ctrl-V）
@@ -787,8 +814,8 @@ tau は起動時に `Console.In` を **64KB バッファの StreamReader** に�
 
 ```
 chcp                          ← 現在のコードページを確認（932 など）
-/set inputEncoding shift-jis  ← 932 のとき
-/set inputEncoding utf-8      ← 65001（UTF-8）のとき
+--config set inputEncoding shift-jis  ← 932 のとき
+--config set inputEncoding utf-8      ← 65001（UTF-8）のとき
 ```
 
 ### ストリーミング表示
@@ -858,11 +885,12 @@ HTTP エラーや証明書エラーは、繰り返しても結果が変わらな
 うまく接続できない場合は、**接続診断**を実行してください。
 
 ```
-tau.exe --diag
+tau.exe --test              # 接続診断 + 自己診断(API リクエストを含む)
+tau.exe --test=offline      # ネットワークを使わない
 ```
 
 環境情報（.NET / Mono / OS / 既定の TLS）、接続先の DNS、**TLS の各バージョンでの接続可否**、
-実際の API 呼び出し結果を表示します。
+実際の API 呼び出し結果を表示します。そのあとに自己診断（エンコーディング・TLS）が続きます。
 
 ```
   [TLS の接続試験]
@@ -878,7 +906,7 @@ TLS の可否は **TCP 接続 + TLS ハンドシェイクだけ**で判定しま
 
 #### 出力の見方
 
-`--diag` は 3 種類の試験を行います。
+`--test` は 3 種類の試験を行います。
 
 | 試験 | 内容 |
 |---|---|
@@ -1006,7 +1034,7 @@ Python は不要です。
 |---|---|
 | `tests/ChatIntegrationTests.cs` | ストリーミング・ツールループ・セッション・エラー処理 |
 | `tests/CommandIntegrationTests.cs` | `/model` `/tools` `/set` `/open` `/delete` `/clear` |
-| `tests/EncodingIntegrationTests.cs` | 日本語・NUL・長文入力・`--diag` `--test` |
+| `tests/EncodingIntegrationTests.cs` | 日本語・NUL・長文入力・`--test` |
 | `tests/WebIntegrationTests.cs` | `--web` の画面・SSE・CSRF 拒否・404 |
 | `tests/OutputIntegrationTests.cs` | 改行・進行状況・データ移行・デバッグ出力 |
 
@@ -1187,8 +1215,8 @@ tau-cli/  (= リポジトリ直下)
     Chat.cs                 対話ループ・コマンド処理
     WebServer.cs            --web の HTTP サーバ（SSE・最小 API）
     www/index.html          --web の画面（埋め込みリソース）
-    Diagnostics.cs          --diag 接続診断
-    Settings.cs             /config と /config edit
+    Diagnostics.cs          接続診断（--test から呼ばれる）
+    Settings.cs             設定の表示・変更（--config）
     LineEditor.cs           入力（行編集・コンソールモード・クリップボード）
     MarkdownRenderer.cs     Markdown の整形表示
     SelfTest.cs             --test 自己診断テスト
@@ -1216,8 +1244,8 @@ tau-cli/  (= リポジトリ直下)
 | `ConsoleUi` | 色付き・太字・淡色の出力 |
 | `LineEditor` | 入力の読み取り、コンソールの行編集モード、クリップボード |
 | `MarkdownRenderer` | 見出し・太字・表などを ANSI と罫線で整形 |
-| `Settings` | `/config` の表示と `/config edit` の対話編集 |
-| `Diagnostics` | `--diag` の接続診断 |
+| `Settings` | `/config` の表示と `--config edit` の対話編集 |
+| `Diagnostics` | 接続診断（`--test` から呼ばれる） |
 | `SelfTest` | `--test` の自己診断テスト |
 
 ## リポジトリ構成

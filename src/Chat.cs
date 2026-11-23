@@ -91,9 +91,14 @@ namespace Tau
 
         // ---------------- 実行 ----------------
 
-        public void Run(string sessionArg)
+        public void Run(string sessionArg, bool forceNew = false)
         {
-            ctx = LoadOrCreate(sessionArg, true);
+            // --open は番号でも ID でも受け付ける(/open と同じ規則)
+            string openId = (sessionArg != null && sessionArg.Trim().Length > 0)
+                ? ResolveSessionId(sessionArg) : "";
+
+            // --new: 必ず新しいセッションを作る
+            ctx = forceNew ? LoadOrCreate("", false) : LoadOrCreate(openId, true);
             bool resumed = ctx.Messages.Count > 0;
             ConsoleUi.Banner(cfg, ctx, resumed);
 
@@ -232,6 +237,73 @@ namespace Tau
             ConsoleUi.Dim("Bye. Session: " + ctx.Id);
         }
 
+        // コマンド名と、省略したときに受け付ける最短の長さ。
+        //
+        // Vim のヘルプと同じ書き方で「/n[ew]」は /n でも /ne でも /new でも
+        // 受け付ける、という意味。最短の長さより短いと曖昧なので拒否する。
+        static readonly (string name, int minLen)[] COMMANDS =
+        {
+            ("new", 1),      // /n
+            ("list", 1),     // /l
+            ("open", 1),     // /o
+            ("delete", 1),   // /d
+            ("clear", 2),    // /cl (c は config と衝突するため 2 文字必要)
+            ("tools", 1),    // /t
+            ("exit", 1),     // /e
+            ("quit", 1),     // /q
+            ("help", 1),     // /h
+            ("model", 1),    // /m
+            ("config", 2),   // /co (c は clear と衝突するため 2 文字必要)
+            ("set", 2),      // /se (s は単独では曖昧)
+        };
+
+        // 省略されたコマンド名を解決する。見つからなければ null。
+        static string ResolveCommand(string cmd)
+        {
+            if (cmd.Length < 2 || cmd[0] != '/') return null;
+            string name = cmd.Substring(1);
+
+            // 完全一致を優先する
+            foreach ((string n, int _) in COMMANDS)
+                if (n == name) return n;
+
+            // 前方一致で探す。
+            //
+            // 候補が 1 つだけなら、最短の長さに満たなくても解決する
+            // (/s は /set しか候補が無いので /s でよい)。
+            // 候補が複数あるときは、最短の長さを満たすものだけを残す。
+            // 残った候補が 1 つなら解決、2 つ以上なら曖昧として拒否する。
+            List<string> candidates = new();
+            foreach ((string n, int _) in COMMANDS)
+                if (n.StartsWith(name, StringComparison.Ordinal)) candidates.Add(n);
+
+            if (candidates.Count == 0) return null;
+            if (candidates.Count == 1) return candidates[0];
+
+            List<string> allowed = new();
+            foreach (string n in candidates)
+            {
+                int minLen = 1;
+                foreach ((string cn, int cl) in COMMANDS)
+                    if (cn == n) { minLen = cl; break; }
+                if (name.Length >= minLen) allowed.Add(n);
+            }
+
+            return (allowed.Count == 1) ? allowed[0] : null;
+        }
+
+        // 前方一致する候補を、省略形で返す(例: "c" -> "/cl", "/co")。
+        static string[] Suggestions(string prefix)
+        {
+            List<string> list = new();
+            foreach ((string n, int minLen) in COMMANDS)
+            {
+                if (n.StartsWith(prefix, StringComparison.Ordinal))
+                    list.Add("/" + n.Substring(0, minLen));
+            }
+            return list.ToArray();
+        }
+
         // コマンドを処理する。true なら継続、false なら終了。
         bool HandleCommand(string line)
         {
@@ -239,20 +311,44 @@ namespace Tau
             string cmd = parts[0].ToLowerInvariant();
             string arg = (parts.Length > 1) ? parts[1].Trim() : "";
 
+            // /? だけは特別扱い(ヘルプ)
+            if (cmd == "/?") { Program.PrintHelp(); return true; }
+
+            // 省略形を解決する(/n -> new, /e -> exit など)
+            string resolved = ResolveCommand(cmd);
+            if (resolved != null) cmd = "/" + resolved;
+            else if (cmd.Length > 1 && cmd[0] == '/')
+            {
+                // 解決できなかった(未知、または短すぎて曖昧)
+                ConsoleUi.Danger("Unknown command: " + cmd + "\n");
+
+                // 前方一致する候補があれば、必要な長さを案内する
+                string[] hints = Suggestions(cmd.Substring(1));
+                if (hints.Length > 0)
+                {
+                    ConsoleUi.Dim("  Did you mean: ");
+                    for (int i = 0; i < hints.Length; i++)
+                    {
+                        if (i > 0) ConsoleUi.Dim(", ");
+                        ConsoleUi.Accent(hints[i]);
+                    }
+                    ConsoleUi.Dim("\n");
+                }
+                ConsoleUi.Dim("  Use /help to list the commands\n");
+                return true;
+            }
+
             switch (cmd)
             {
                 case "/exit":
                 case "/quit":
-                case "/q":
                     return false;
 
                 case "/help":
-                case "/?":
                     Program.PrintHelp();
                     return true;
 
                 case "/clear":
-                case "/cls":
                     ClearSession();
                     return true;
 
@@ -261,12 +357,11 @@ namespace Tau
                     ConsoleUi.Info("Started a new session: " + ctx.Id);
                     return true;
 
-                case "/sessions":
+                case "/list":
                     ShowSessions();
                     return true;
 
                 case "/delete":
-                case "/del":
                     DeleteSession(arg);
                     return true;
 
@@ -314,7 +409,6 @@ namespace Tau
                     return true;
 
                 case "/config":
-                case "/settings":
                     {
                         string sub = arg.Trim().ToLowerInvariant();
                         if (sub == "edit" || sub == "e")
