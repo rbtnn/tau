@@ -22,12 +22,15 @@ tau.exe            … 直接起動
 `build.bat` は `dotnet publish` で単一ファイルの `tau.exe` を作ります。
 **.NET SDK 10** が必要です（`winget install Microsoft.DotNet.SDK.10`）。
 
-Linux / macOS では `mono` の `mcs` でビルドできます。
+Linux でもビルドして動かせます（開発・テスト用）。
 
 ```
-mcs -langversion:5 -out:tau.exe src/*.cs
-mono tau.exe
+dotnet publish tau-cli.csproj -c Release -r linux-x64 \
+  --self-contained -p:PublishSingleFile=true -o dist
+./dist/tau
 ```
+
+配布しているのは **Windows 版（x86 / x64）だけ**です。
 
 ---
 
@@ -962,7 +965,7 @@ GitHub Actions（`.github/workflows/build.yml`）で次を実行します。
 |---|---|
 | `test` | `dotnet test` を Ubuntu / Windows で実行 |
 | `selftest` | ビルドした `tau` で `--test=offline` を実行 |
-| `build` | 6 つの RID 向けに単一ファイルを publish |
+| `build` | Windows (x86 / x64) 向けに単一ファイルを publish |
 | `tau-web` | `tau-web` の整合性チェック（壊れていないか） |
 | `release` | タグ push 時に GitHub Release を作成 |
 
@@ -971,17 +974,34 @@ GitHub Actions（`.github/workflows/build.yml`）で次を実行します。
 `v*` タグを push すると、以下が Release に添付されます。
 
 ```
-tau-win-x64.zip       tau-linux-x64.tar.gz
-tau-win-arm64.zip     tau-linux-arm64.tar.gz
-                      tau-osx-x64.tar.gz
-                      tau-osx-arm64.tar.gz
+tau-win-x86.zip   32bit Windows 向け
+tau-win-x64.zip   64bit Windows 向け
 ```
 
-すべて**自己完結の単一ファイル**です（.NET ランタイムのインストール不要）。
+どちらも**自己完結の単一ファイル**（`tau.exe` 1 個だけ）です。
+.NET ランタイムも SDK も**インストール不要**で、展開してそのまま実行できます。
 
 ```
 git tag v1.0.0
 git push origin v1.0.0
+```
+
+### どちらを選ぶか
+
+| 環境 | 使うファイル |
+|---|---|
+| 64bit Windows (10 / 11) | `tau-win-x64.zip` |
+| 32bit Windows | `tau-win-x86.zip` |
+
+迷ったら `tau-win-x64.zip` を選んでください。64bit Windows 上では
+x64 版の方がわずかに高速です。`--version` の `runtime:` 行で
+どちらが動いているか確認できます。
+
+```
+tau 2026-11-23 dotnet10+json
+  exe   : C:\work\tau.exe
+  built : 2026-11-23 11:32:18 UTC
+  runtime: 10.0.15 (win-x64)
 ```
 
 ## JSON の扱い

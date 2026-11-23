@@ -20,7 +20,7 @@
     <!-- 単一ファイルで配布する -->
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
-    <RuntimeIdentifiers>win-x64;win-arm64;linux-x64;linux-arm64;osx-x64;osx-arm64</RuntimeIdentifiers>
+    <RuntimeIdentifiers>win-x86;win-x64</RuntimeIdentifiers>
 
     <!-- 圧縮してサイズを抑える -->
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>

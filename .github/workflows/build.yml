@@ -93,7 +93,7 @@ jobs:
           fi
 
   # ---------------------------------------------------------------------
-  #  リリース: タグ push 時に各プラットフォーム向け単一ファイルを publish する
+  #  リリース: タグ push 時に Windows (x86 / x64) 向け単一ファイルを作る
   # ---------------------------------------------------------------------
   build:
     name: build (${{ matrix.rid }})
@@ -103,18 +103,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - rid: win-x86
           - rid: win-x64
-            ext: .exe
-          - rid: win-arm64
-            ext: .exe
-          - rid: linux-x64
-            ext: ''
-          - rid: linux-arm64
-            ext: ''
-          - rid: osx-x64
-            ext: ''
-          - rid: osx-arm64
-            ext: ''
 
     steps:
       - uses: actions/checkout@v4
@@ -138,19 +128,13 @@ jobs:
         run: |
           cd "publish/${{ matrix.rid }}"
           rm -f ./*.pdb
-          if [ "${{ matrix.rid }}" = "win-x64" ] || [ "${{ matrix.rid }}" = "win-arm64" ]; then
-            zip -q "../../tau-${{ matrix.rid }}.zip" tau.exe
-          else
-            tar czf "../../tau-${{ matrix.rid }}.tar.gz" tau
-          fi
+          zip -q "../../tau-${{ matrix.rid }}.zip" tau.exe
 
       - uses: actions/upload-artifact@v4
         with:
           name: tau-${{ matrix.rid }}
-          path: |
-            tau-${{ matrix.rid }}.zip
-            tau-${{ matrix.rid }}.tar.gz
-          if-no-files-found: ignore
+          path: tau-${{ matrix.rid }}.zip
+          if-no-files-found: error
 
   # ---------------------------------------------------------------------
   #  tau-web (Web UI 版) も壊れていないか確認する
@@ -200,8 +184,6 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/*.zip
-            artifacts/*.tar.gz
+          files: artifacts/*.zip
           generate_release_notes: true
           fail_on_unmatched_files: true
