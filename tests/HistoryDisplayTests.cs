@@ -47,8 +47,91 @@ namespace Tau.Tests
         {
             int a = output.IndexOf("---- conversation so far ----");
             int b = output.IndexOf("---- continue below ----");
-            if (a < 0 || b < 0) return output;
+            Assert.True(a >= 0 && b > a, "history markers missing:\n" + output);
             return output.Substring(a, b - a);
+        }
+
+        string Replay(string messagesJson)
+        {
+            runner.WriteConfig(llm.Url);
+            var session = new Dictionary<string, object>
+            {
+                ["id"] = "s_history_fixture",
+                ["title"] = "History fixture",
+                ["messages"] = Json.Parse(messagesJson),
+            };
+            File.WriteAllText(Path.Combine(runner.SessionsDir, "s_history_fixture.json"),
+                Json.ToString(session), Encoding.UTF8);
+            string history = History(runner.Run("/exit\n", new[] { "--open", "s_history_fixture" }));
+            Assert.Empty(llm.Requests);
+            return history;
+        }
+
+        [Fact]
+        public void LegacyStepsSurviveAlongsideModernTurns()
+        {
+            string history = Replay("""
+                [
+                  {"role":"user","content":"old"},
+                  {"role":"assistant","content":"old answer","steps":["Tool: shell  echo OLD"]},
+                  {"role":"user","content":"new"},
+                  {"role":"assistant","tool_calls":[{"id":"c1","function":{"name":"shell","arguments":"{\"cmd\":\"echo NEW\"}"}}]},
+                  {"role":"tool","tool_call_id":"c1","name":"shell","content":"{}"},
+                  {"role":"assistant","content":"new answer","steps":["Tool: shell  echo NEW"]}
+                ]
+                """);
+            Assert.Contains("▶ Tool: shell  echo OLD", history);
+            Assert.Equal(1, history.Split('\n').Count(line => line.Contains("echo NEW")));
+        }
+
+        [Fact]
+        public void OnlyMatchingStepsAreSuppressed()
+        {
+            string history = Replay("""
+                [
+                  {"role":"user","content":"partial history"},
+                  {"role":"assistant","tool_calls":[{"id":"c1","function":{"name":"shell","arguments":{"cmd":"echo SAME"}}}]},
+                  {"role":"tool","tool_call_id":"c1","name":"shell","content":"{}"},
+                  {"role":"assistant","content":"done","steps":["Tool: shell  echo SAME","Tool: shell  echo SAME","Tool: read_file  missing.txt","Other progress"]}
+                ]
+                """);
+            Assert.Equal(2, history.Split('\n').Count(line => line.Contains("echo SAME")));
+            Assert.Contains("▶ Tool: read_file  missing.txt", history);
+            Assert.Contains("▶ Other progress", history);
+        }
+
+        [Theory]
+        [InlineData("{\"role\":\"user\",\"content\":\"next turn\"},")]
+        [InlineData("{\"role\":\"assistant\",\"tool_calls\":[]},")]
+        public void OrphanToolDoesNotReuseArgumentsFromAnEarlierBatch(string boundary)
+        {
+            string history = Replay("""
+                [
+                  {"role":"user","content":"first"},
+                  {"role":"assistant","tool_calls":[{"id":"reused","function":{"name":"shell","arguments":{"cmd":"echo FIRST"}}}]},
+                  {"role":"tool","tool_call_id":"reused","name":"shell","content":"{}"},
+                """ + boundary + """
+                  {"role":"tool","tool_call_id":"reused","name":"shell","content":"{}"}
+                ]
+                """);
+            Assert.Equal(1, history.Split('\n').Count(line => line.Contains("echo FIRST")));
+            Assert.Contains("  ▶ Tool: shell\n", history.Replace("\r\n", "\n"));
+        }
+
+        [Fact]
+        public void IncompleteHistoryDoesNotPreventReplay()
+        {
+            string history = Replay("""
+                [
+                  null, 123, {},
+                  {"role":"user","content":"question"},
+                  {"role":"assistant","tool_calls":[null,{}, {"id":"broken","function":{"arguments":"not json"}}]},
+                  {"role":"tool","name":"read_file","tool_call_id":"broken"},
+                  {"role":"assistant","content":"answer"}
+                ]
+                """);
+            Assert.Contains("▶ Tool: read_file", history);
+            Assert.Contains("answer", history);
         }
 
         [Fact]
@@ -170,32 +253,14 @@ namespace Tau.Tests
         [Fact]
         public void NoToolMessagesFallsBackToSteps()
         {
-            // tool メッセージが無い古いセッションでも steps で表示できること。
-            runner.WriteConfig(llm.Url);
-
-            Dictionary<string, object> sess = new();
-            sess["id"] = "s_old_steps";
-            sess["title"] = "古いセッション";
-            List<object> msgs = new();
-
-            Dictionary<string, object> u = new();
-            u["role"] = "user";
-            u["content"] = "古い質問";
-            msgs.Add(u);
-
-            Dictionary<string, object> a = new();
-            a["role"] = "assistant";
-            a["content"] = "古い回答";
-            List<object> steps = new() { "Tool: shell  ls" };
-            a["steps"] = steps;
-            msgs.Add(a);
-
-            sess["messages"] = msgs;
-            File.WriteAllText(Path.Combine(runner.SessionsDir, "s_old_steps.json"),
-                Json.ToString(sess), Encoding.UTF8);
-
-            string output = runner.Run("/exit\n", new[] { "--open", "s_old_steps" });
-            Assert.Contains("ls", output);
+            string history = Replay("""
+                [
+                  {"role":"user","content":"古い質問"},
+                  {"role":"assistant","content":"古い回答","steps":["Tool: shell  ls"]}
+                ]
+                """);
+            Assert.Contains("▶ Tool: shell  ls", history);
+            Assert.Contains("古い回答", history);
         }
     }
 }

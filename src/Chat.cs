@@ -660,15 +660,9 @@ namespace Tau
             // 続く tool メッセージの詳細表示に使う。
             Dictionary<string, string> callArgs = new();
 
-            // tool メッセージが保存されているか調べる。
-            // 保存されていれば、そこから「▶ Tool: 名前  詳細」を出せるので
-            // steps(要約)は出さない。同じ呼び出しを二重に表示しないため。
-            bool hasToolMessages = false;
-            foreach (object o in c.Messages)
-            {
-                Dictionary<string, object> m = o as Dictionary<string, object>;
-                if (m != null && Json.AsString(m["role"]) == "tool") { hasToolMessages = true; break; }
-            }
+            // このターンで既に表示した実行記録だけを steps から除く。
+            // 回数も保持し、旧形式・部分的な履歴の記録まで消さない。
+            Dictionary<string, int> displayedSteps = new(StringComparer.Ordinal);
 
             for (int idx = 0; idx < c.Messages.Count; idx++)
             {
@@ -679,6 +673,8 @@ namespace Tau
 
                 if (role == "user")
                 {
+                    callArgs.Clear();
+                    displayedSteps.Clear();
                     ConsoleUi.Accent("> ");
                     Console.WriteLine(content);
                 }
@@ -687,6 +683,7 @@ namespace Tau
                     // ツール呼び出しの引数を覚えておく(続く tool の表示用)
                     if (m.ContainsKey("tool_calls") && m["tool_calls"] is List<object> tcs)
                     {
+                        callArgs.Clear();
                         foreach (object tco in tcs)
                         {
                             Dictionary<string, object> tc = tco as Dictionary<string, object>;
@@ -710,14 +707,17 @@ namespace Tau
                             ConsoleUi.Think("  [thinking] " + think + "\n");
                     }
 
-                    // ツール実行の要約。tool メッセージが保存されている場合は
-                    // そちらで詳細まで出るので、ここでは出さない(二重表示を防ぐ)。
-                    if (!hasToolMessages
-                        && m.ContainsKey("steps") && m["steps"] is List<object> steps)
+                    // 既に表示した tool と一致する記録だけを、一件ずつ消費する。
+                    if (m.ContainsKey("steps") && m["steps"] is List<object> steps)
                     {
                         for (int i = 0; i < steps.Count; i++)
                         {
                             string st = Json.AsString(steps[i]);
+                            if (displayedSteps.TryGetValue(st, out int count) && count > 0)
+                            {
+                                displayedSteps[st] = count - 1;
+                                continue;
+                            }
                             if (st.Length > 0)
                                 ConsoleUi.Dim("  ▶ " + st + "\n");
                         }
@@ -737,9 +737,12 @@ namespace Tau
                     // 実行時と同じ「▶ Tool: 名前  詳細」で表示する。
                     // 引数は直前の assistant の tool_calls から取る。
                     string detail = "";
-                    if (id.Length > 0 && callArgs.ContainsKey(id))
-                        detail = Agent.ToolDetailOf(nn, callArgs[id]);
+                    if (id.Length > 0 && callArgs.TryGetValue(id, out string args))
+                        detail = ToolDisplay.Detail(nn, args);
                     ConsoleUi.Tool(nn, detail);
+                    string step = ToolDisplay.Step(nn, detail);
+                    displayedSteps.TryGetValue(step, out int count);
+                    displayedSteps[step] = count + 1;
                 }
             }
             ConsoleUi.Dim("---- continue below ----");

@@ -80,54 +80,15 @@ namespace Tau
             return asst;
         }
 
-        static Dictionary<string, object> Get(Dictionary<string, object> d, string key)
+        static object Get(Dictionary<string, object> d, string key)
         {
-            if (d != null && d.ContainsKey(key)) return d[key] as Dictionary<string, object>;
-            return null;
+            return d != null && d.TryGetValue(key, out object value) ? value : null;
         }
 
         static string ThinkOf(StringBuilder sb)
         {
             if (sb == null || sb.Length == 0) return null;
             return sb.ToString();
-        }
-
-        // ツール実行の内容を 1 行にまとめる(表示・保存用)
-        // 履歴の表示用。ツール名と引数 JSON から詳細文字列を作る。
-        // ToolDetail は private なので、Chat から使えるよう公開する。
-        public static string ToolDetailOf(string name, string argsJson)
-        {
-            return ToolDetail(name, argsJson);
-        }
-
-        static string ToolDetail(string name, string argsJson)
-        {
-            if (argsJson == null || argsJson.Length == 0) return "";
-            Dictionary<string, object> a = null;
-            try { a = Json.Parse(argsJson) as Dictionary<string, object>; }
-            catch { }
-            if (a == null) return "";
-
-            string cmd = ArgStr(a, "cmd");
-            string path = ArgStr(a, "path");
-            string pattern = ArgStr(a, "pattern");
-            string url = ArgStr(a, "url");
-            string method = ArgStr(a, "method");
-
-            if (name == "shell") return cmd;
-            if (name == "read_file" || name == "write_file" || name == "list_dir")
-                return pattern.Length > 0 ? (path + "  [" + pattern + "]") : path;
-            if (name == "curl") return (method.Length > 0 ? (method + " ") : "") + url;
-            if (cmd.Length > 0) return cmd;
-            if (path.Length > 0) return path;
-            if (url.Length > 0) return url;
-            return "";
-        }
-
-        static string ArgStr(Dictionary<string, object> d, string k)
-        {
-            if (d == null || !d.ContainsKey(k)) return "";
-            return Json.AsString(d[k]).Trim();
         }
 
         // ---------------- コンパクション ----------------
@@ -206,7 +167,7 @@ namespace Tau
                         foreach (object tc in (List<object>)m["tool_calls"])
                         {
                             Dictionary<string, object> c = tc as Dictionary<string, object>;
-                            Dictionary<string, object> fn = (c == null) ? null : (Get(c, "function"));
+                            Dictionary<string, object> fn = Get(c, "function") as Dictionary<string, object>;
                             string nm = (fn != null) ? Json.AsString(Get(fn, "name")) : "";
                             string ar = (fn != null) ? Json.AsString(Get(fn, "arguments")) : "";
                             sb.Append("[Tool call] ").Append(nm).Append(" args=")
@@ -384,7 +345,7 @@ namespace Tau
                                 if (id.Length == 0) id = "call_" + k;
                                 call["id"] = id;
 
-                                Dictionary<string, object> fn = Get(call, "function");
+                                Dictionary<string, object> fn = Get(call, "function") as Dictionary<string, object>;
                                 string name = "";
                                 string argsJson = "{}";
                                 if (fn != null)
@@ -397,10 +358,8 @@ namespace Tau
                                 if (name == null || name.Trim().Length == 0) name = ToolExecutor.InferName(fn, argsJson);
                                 if (fn != null && name != null && name.Trim().Length > 0) fn["name"] = name;
 
-                                string detail = ToolDetail(name, argsJson);
-                                string step = "Tool: " + (name.Length > 0 ? name : "?")
-                                    + (detail.Length > 0 ? ("  " + detail) : "");
-                                turnSteps.Add(step);
+                                string detail = ToolDisplay.Detail(name, argsJson);
+                                turnSteps.Add(ToolDisplay.Step(name, detail));
                                 if (onTool != null) onTool(name, detail);
 
                                 string result;

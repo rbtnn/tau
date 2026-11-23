@@ -254,15 +254,22 @@ namespace Tau
             try
             {
                 bool win = Path.DirectorySeparatorChar == '\\';
+                // /bin/sh の -c はコマンド全体を一つの引数として受け取る。
+                // cmd.exe は独自の引用符規則を持つため従来のコマンドラインを保つ。
                 ProcessStartInfo psi = win
                     ? new ProcessStartInfo("cmd.exe", "/c " + cmd)
-                    : new ProcessStartInfo("/bin/sh", "-c " + cmd);
+                    : new ProcessStartInfo("/bin/sh");
+                if (!win)
+                {
+                    psi.ArgumentList.Add("-c");
+                    psi.ArgumentList.Add(cmd);
+                }
                 psi.UseShellExecute = false;
                 psi.CreateNoWindow = true;
                 psi.RedirectStandardOutput = true;
                 psi.RedirectStandardError = true;
 
-                Process p = Process.Start(psi);
+                using Process p = Process.Start(psi);
                 System.Threading.Tasks.Task<byte[]> so = CopyToBytesAsync(p.StandardOutput.BaseStream);
                 System.Threading.Tasks.Task<byte[]> se = CopyToBytesAsync(p.StandardError.BaseStream);
 

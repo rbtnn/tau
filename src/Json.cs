@@ -38,9 +38,8 @@ namespace Tau
             SkipValidation = false,
         };
 
-        // JsonDocument の既定は緩め (コメント・末尾カンマ・単一引用符を許す)。
-        // API の応答が壊れているのに通ってしまうと、後段で意味不明な
-        // エラーになるので、RFC 8259 どおり厳しく判定する。
+        // コメント・末尾カンマは既定でも拒否されるが、方針を明示する。
+        // 単一引用符も JsonDocument が拒否する。最大深度は 256 に拡張する。
         static readonly JsonDocumentOptions StrictOptions = new()
         {
             CommentHandling = JsonCommentHandling.Disallow,

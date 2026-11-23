@@ -89,6 +89,36 @@ namespace Tau.Tests
             Assert.Contains("list_dir", output);
         }
 
+        [Theory]
+        [InlineData("memory_read", "{}")]
+        [InlineData("list_dir", "{\"path\":\".\"}")]
+        public void ToolLoopPreservesExplicitNameAndCallId(string name, string args)
+        {
+            llm.Reply = req => MockLlm.ToolResultCount(req) == 0
+                ? new[] { MockLlm.ToolCall("original-call-id", name, args) }
+                : new[] { new Dictionary<string, object> { ["content"] = "done" } };
+            runner.WriteConfig(llm.Url, allowTools: true);
+
+            runner.Run("実行して\n/exit\n");
+
+            Assert.Equal(2, llm.Requests.Count);
+            var messages = Assert.IsType<List<object>>(llm.Requests[1]["messages"]);
+            var tool = Assert.Single(messages.OfType<Dictionary<string, object>>()
+                .Where(m => Json.AsString(m["role"]) == "tool"));
+            Assert.Equal("original-call-id", tool["tool_call_id"]);
+            Assert.Equal(name, tool["name"]);
+            var result = Assert.IsType<Dictionary<string, object>>(Json.Parse(Json.AsString(tool["content"])));
+            Assert.False(result.ContainsKey("error"), Json.ToString(result));
+            Assert.Equal("true", Json.AsString(result["ok"]));
+
+            var assistant = Assert.Single(messages.OfType<Dictionary<string, object>>()
+                .Where(m => m.ContainsKey("tool_calls")));
+            var call = Assert.IsType<Dictionary<string, object>>(
+                Assert.Single(Assert.IsType<List<object>>(assistant["tool_calls"])));
+            Assert.Equal("original-call-id", call["id"]);
+            Assert.Equal(name, Assert.IsType<Dictionary<string, object>>(call["function"])["name"]);
+        }
+
         // ---------------- セッション ----------------
 
         [Fact]

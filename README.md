@@ -117,8 +117,8 @@ tau.exe --config edit
 
 ```
 > ファイル一覧を見せて
-  [思考] まず一覧を見よう。
-  ▶ ツール実行: list_dir  .
+  [thinking] まず一覧を見よう。
+  ▶ Tool: list_dir  .
 
 一覧を取得しました。完了です。
 ```
@@ -285,6 +285,7 @@ SSE のイベントは `think`（思考）・`tool`（ツール実行）・`delt
 | 種類 | パス |
 |---|---|
 | 設定 | `%APPDATA%\tau-cli\tau.json` |
+| メモリ（全セッション共通） | `%APPDATA%\tau-cli\memory.json` |
 | セッション | `%APPDATA%\tau-cli\sessions\<id>.json` |
 | 最後に開いたセッション | `%APPDATA%\tau-cli\sessions\_state.json` |
 
@@ -348,7 +349,8 @@ TAU_CONFIG
   "proxyPass": "",
   "useSystemProxy": true,
   "systemPrompt": "",
-  "inputEncoding": "shift-jis"
+  "inputEncoding": "shift-jis",
+  "memoryMaxChars": 8000
 }
 ```
 
@@ -662,86 +664,17 @@ tau.exe
 
 ### `tau --test`（自己診断テスト）
 
-`tau --test` は、環境・入力・設定・**LLM API への実際の HTTP リクエスト**まで
-まとめて確認します。失敗があれば終了コード 1 を返します。
+`tau --test` は接続診断（実際の API リクエストを含む）と、実行環境に依存する
+自己診断を実行します。ネットワークを使わず確認する場合は `--test=offline` を使います。
 
 ```
-tau.exe --test            … すべて確認（API へのリクエストを含む）
-tau.exe --test=offline    … ネットワークを使わずに確認（CI 向け）
+tau.exe --test            … 接続診断 + 自己診断
+tau.exe --test=offline    … 自己診断だけ（CI 向け）
 ```
 
-| # | 項目 | 内容 |
-|---|---|---|
-| 1 | environment | OS / .NET / 入出力エンコーディング |
-| 2 | console modes | `ENABLE_LINE_INPUT`（Ctrl-V が効くか） |
-| 3 | encodings | 全角・半角・混在・丸数字の往復、NUL の有無 |
-| 4 | buffer limit | 254 文字の壁がないか（パイプ入力時は実際に 600 文字を読む） |
-| 5 | clipboard | 読み取りと往復 |
-| 6 | markdown | 表示幅（実測）・記号除去・罫線 |
-| **7** | **JSON** | **パース・シリアライズ・往復・OpenAI 形式の解釈** |
-| 8 | Ctrl-C | ハンドラ登録 |
-| 9 | session store | 日本語を含む保存・読み込み・削除 |
-| 10 | config file | 未知キーの保持・`models` の除去 |
-| 11 | TLS | TLS 1.2 が適用されているか |
-| **12** | **LLM API** | **非ストリーミングとストリーミングの実リクエスト** |
-| 13 | interactive input | 実際に 1 行入力して何が届くか（任意） |
-
-#### 7. JSON
-
-`Json` は外部ライブラリを使わない自前のパーサ／シリアライザです。
-壊れると API 応答の解釈がすべて狂うため、単体で重点的に検証します。
-
-```
-  7. JSON parser / serializer
-  [OK] parses an integer
-  [OK] parses null
-  [OK] parses an escaped quote
-  [OK] parses a \uXXXX escape
-  [OK] parses raw Japanese text
-  [OK] parses an array
-  [OK] parses deeply nested structures
-  [OK] throws on a missing value
-  [OK] serialises a string
-  [OK] escapes a backslash
-  [OK] keeps Japanese text unescaped
-  [OK] parse -> serialise -> parse is stable
-  [OK] parses an OpenAI chat.completion response
-  [OK] parses a tool_call and its nested arguments JSON
-```
-
-| 分類 | 内容 |
-|---|---|
-| パース | 整数・負数・小数・真偽・null・文字列・配列・オブジェクト・ネスト・空白 |
-| エスケープ | `\"` `\n` `\t` `\\` `\uXXXX`・生の日本語 |
-| 不正入力 | 値の欠落・未終端の配列・空入力・コロン欠落 → **例外** |
-| シリアライズ | 各型・エスケープ・日本語をそのまま保持 |
-| 往復 | `parse → ToString → parse` で結果が変わらないこと |
-| 実データ | OpenAI の `chat.completion` 応答・`tool_calls` の `arguments` JSON |
-
-#### 12. LLM API リクエスト
-
-`tau.json`（または環境変数）の設定で、実際に API を呼びます。
-
-```
-  11. LLM API request (real HTTP)
-       url   : https://.../v1/chat/completions
-       model : ...
-       key   : (set, 42 chars)
-  [OK] llmApiUrl is set
-  [1] non-streaming request (tools off)...
-  [OK] non-streaming request completed in 812 ms
-  [OK] the response contains text
-       reply : OK
-       tokens: 15
-  [2] streaming request (tools off)...
-  [OK] streaming request completed in 640 ms (3 chunks)
-  [OK] streaming delivered text incrementally
-```
-
-- 応答時間・トークン数・応答本文の先頭が表示されます
-- 接続できない場合は `[NG]` と理由（`ConnectFailure` など）が出ます
-- API キーは**長さだけ**表示し、内容は出しません
-- `llmApiUrl` が空の場合はスキップします（失敗扱いにしません）
+自己診断は環境・コンソールモード・エンコーディング・長文のエンコーディング往復・
+TLS 設定の 5 セクションです。詳細は後述の「テスト」を参照してください。
+JSON・Markdown・セッション保存などの検証は `dotnet test` に移しています。
 
 `diag_input.bat` をダブルクリックすると、バージョン・コードページ・
 環境変数・長い日本語入力のテストをまとめて実行できます。
@@ -865,8 +798,10 @@ chcp                          ← 現在のコードページを確認（932 な
 
 ### ストリーミング表示
 
-応答はトークン単位でそのまま表示されます。`emitReasoning` が有効なら
-**思考（reasoning_content）** も `[思考]` として表示します。
+LLM からの応答はストリーミングで受信します。コンソールでは本文をバッファし、
+受信完了後に Markdown として整形表示します。`emitReasoning` が有効なら
+**思考（reasoning_content）** は受信中に表示します。
+Web UI では本文も逐次表示します。
 
 ANSI エスケープが使える環境（Windows 10 以降のコンソール、Unix 系のターミナル）では色付きで表示し、
 リダイレクト時や `NO_COLOR` 指定時は素のテキストになります。
@@ -889,7 +824,10 @@ ANSI エスケープが使える環境（Windows 10 以降のコンソール、U
 
 ツール実行は `▶ Tool: <name>  <detail>` として 1 行で表示されます。
 再起動して履歴を表示するときも、同じ形式で詳細まで表示します
-（引数は直前の `tool_calls` から復元します）。
+（引数は直前の `tool_calls` から呼び出し ID で復元します）。
+旧形式の `steps` だけが残る履歴も表示します。同じターンで既に表示した実行記録と
+一致する `steps` だけを省くため、旧形式と新形式が混在しても記録は失われません。
+本文や結果全体ではなく、コマンド・パス・URL などの詳細を表示します。
 
 ---
 
@@ -914,7 +852,7 @@ ANSI エスケープが使える環境（Windows 10 以降のコンソール、U
 
 ```
 > このプロジェクトはタブ幅 4 で、C# を使っています。覚えておいて
-  ▶ Tool: memory_append  このプロジェクトはタブ幅 4、C# を使用
+  ▶ Tool: memory_append
   · 覚えました。
 
 （別のセッションを開く）
@@ -942,28 +880,19 @@ tau.exe --config set memoryMaxChars 4000
 |---|---|---|
 | 範囲 | **全セッション共通** | セッションごと |
 | 内容 | エージェントが選んだ要点だけ | 会話そのもの |
-| 消えると | 手動で消すまで残る | `/delete` で消える |
+| 削除 | メモリツールで削除・置換するまで残る | `/delete` で消える |
 | 容量 | 上限あり（既定 8000 文字） | 上限なし（自動で要約） |
+
+## 通信とコンテキスト管理
 
 ### TLS（HTTPS 接続）
 
-`tau` は LLM API へ接続する前に **TLS のバージョンを明示**します。
+現在の `tau` は **.NET 10 の `HttpClient` / `SocketsHttpHandler`** を使います。
+`LlmClient.PreferredTls` は **TLS 1.2 と TLS 1.3** を指定し、`ApplyTlsTo()` で
+ハンドラへ適用します。実際の接続で使われるバージョンは OS と接続先に依存します。
 
-.NET Framework のターゲットが 4.7 未満だと既定が TLS 1.0 相当になり、
-TLS 1.2 以上を要求する API（OpenAI 系・DeepSeek 系など）で次のエラーになります。
-
-```
-⚠ エラー: LLM API(stream)エラー: 要求は中止されました:
-SSL/TLS のセキュリティで保護されているチャネルを作成できませんでした
-```
-
-`ApplyTls()` は **`Tls12` を単独で指定**します。`SystemDefault` も `Tls13` も使いません。
-
-| 項目 | 理由 |
-|---|---|
-| `SystemDefault`（値 0）を使わない | .NET Framework 4.7 未満では設定自体が拒否され、`SslProtocolType` エラーになる。設定できても実効値が TLS 1.0 のままになることがある |
-| `Tls13` を使わない | Mono や古い .NET では解釈できず、同じ `SslProtocolType` エラーになる |
-| `Tls12` を単独指定 | Windows 7 以降で必ず使えるため最も安全 |
+旧 .NET Framework / Mono 向けの TLS 1.2 固定設定とは異なります。
+接続できない場合は `tau --test` で通信診断を行ってください。
 
 ### 一時的な失敗の自動再試行
 
@@ -1032,7 +961,7 @@ TLS の可否は **TCP 接続 + TLS ハンドシェイクだけ**で判定しま
 
 **`API 呼び出し試験` が `OK` なら、`tau` の接続は正常です。**
 TLS の接続試験が NG でも、それは試験方法の差であり、
-実際の `HttpWebRequest` は別経路で成功している場合があります。
+実際の `HttpClient` のリクエストは別経路で成功している場合があります。
 
 さらに詳しく見たい場合は**デバッグ出力**を有効にします。
 
@@ -1075,8 +1004,7 @@ TLS などの内部エラーは**内部例外のメッセージ**も併記しま
 
 > `受信時に予期しないエラーが発生しました` のようなメッセージは、
 > ストリーム読み取り中の切断（ネットワーク/プロキシのタイムアウト、サーバ側の応答中断）で発生します。
-> `tau` は `Expect: 100-continue` を無効化し、HTTP/1.1 KeepAlive と Nagle 無効化を設定して
-> 接続を安定させています。
+> `tau` は `HttpClient` を再利用し、`Expect: 100-continue` を無効化しています。
 
 ### コンテキストの自動整理
 
@@ -1110,24 +1038,15 @@ TLS などの内部エラーは**内部例外のメッセージ**も併記しま
 
 ## テスト
 
-### `dotnet test`（単体テスト）
+### `dotnet test`（単体・結合テスト）
 
 ```
 dotnet test tests/tests.csproj
 ```
 
-xunit による単体テストです。.NET SDK 10 だけで動きます（`mono` 不要）。
-
-| ファイル | 内容 |
-|---|---|
-| `tests/JsonTests.cs` | JSON のパース・シリアライズ・往復・OpenAI 形式の解釈・厳格性（100 テスト） |
-| `tests/MarkdownTests.cs` | 表示幅（全角・半角・Ambiguous）・記号除去・表の罫線・コードブロックのコピーしやすさ・識別子の `_` |
-| `tests/ConfigTests.cs` | 設定の保存・読み込み・未知キーの保持・データ移行 |
-| `tests/SessionStoreTests.cs` | セッションの保存・一覧・削除・`lastSession` |
-
-```
-Passed!  - Failed: 0, Passed: 186, Skipped: 0, Total: 186
-```
+xUnit による単体テストと、モック LLM を使う結合テストです。
+.NET SDK 10 だけで動きます（`mono` 不要）。外部 LLM の API キーは不要です。
+ツールのテストは表示だけでなく、標準出力・終了コード・API に返す呼び出し ID も検証します。
 
 ### テストの種類
 
@@ -1150,6 +1069,8 @@ Python は不要です。
 | `tests/ConfigTests.cs` | 設定の保存・読み込み・未知キーの保持・移行 |
 | `tests/SessionStoreTests.cs` | セッションの保存・一覧・削除・`lastSession` |
 | `tests/WebServerTests.cs` | Web サーバの起動・停止・イベント名・`ConsoleUi` 差し替え |
+| `tests/ToolDisplayTests.cs` | 実行時・履歴共通のツール詳細書式、不正な引数への耐性 |
+| `tests/ToolExecutorTests.cs` | 空白・引用符を含むシェルコマンド、標準出力・標準エラー・終了コード |
 
 ### 実行時テスト（tau をプロセスとして起動）
 
@@ -1167,10 +1088,10 @@ Python は不要です。
 | `tests/ExecuteOptionTests.cs` | `-e` の実行・セッション非保存・出力の整形 |
 | `tests/CompactionTests.cs` | ツール反復上限でのコンパクションと続行 |
 | `tests/MemoryTests.cs` | メモリの保存・容量制限・システムプロンプトへの埋め込み |
-| `tests/HistoryDisplayTests.cs` | 再起動後の履歴でツール詳細が出るか |
+| `tests/HistoryDisplayTests.cs` | 再起動後のツール詳細・旧形式との混在・重複防止・不完全な履歴 |
 
 ```
-Passed!  - Failed: 0, Passed: 410, Skipped: 0, Total: 410
+Passed!  - Failed: 0, Passed: 436, Skipped: 0, Total: 436
 ```
 
 所要時間は約 30 秒です。
@@ -1291,14 +1212,13 @@ tau 2026-11-23 dotnet10+json
 一方、`JsonDocument` / `Utf8JsonWriter` は同じ内部表現のまま使えるため、
 **呼び出し側を 1 行も変えずに**標準ライブラリへ移行できました。
 
-`JsonTests`（186 テスト中 100 テスト）は移行前に書いたものを**そのまま**通しており、
-互換性が保たれていることを確認済みです。
+`JsonTests` でパース・書き出し・型変換の互換性を検証しています。
 
 ### 厳格モードにしている理由
 
-`JsonDocument.Parse` の既定値は緩く、**コメント・末尾カンマ・単一引用符**を
-受け付けてしまいます。壊れた API 応答がそのまま通ると後段で意味不明な
-エラーになるため、RFC 8259 どおりに拒否します。
+`JsonDocument.Parse` は既定でも**コメント・末尾カンマ・単一引用符**を拒否します。
+`tau` ではコメント・末尾カンマの拒否を明示し、最大深度を 256 に設定しています。
+壊れた API 応答は解析時にエラーにします。
 
 ```csharp
 new JsonDocumentOptions {
@@ -1341,6 +1261,7 @@ tau-cli/  (= リポジトリ直下)
     LlmCancelledException.cs 中断を表す例外
     LlmClient.cs            HTTP 通信（ストリーミング・再試行・TLS）
     ToolExecutor.cs         ツール定義と実行
+    ToolDisplay.cs          ツール詳細と保存用 steps の共通書式
     SessionCtx.cs           セッションの状態
     Agent.cs                エージェント本体（ターン実行・要約）
     ConsoleUi.cs            色付き出力の補助（出力先は差し替え可能）
@@ -1367,7 +1288,7 @@ tau-cli/  (= リポジトリ直下)
 |---|---|
 | `Program` | エントリポイント、CLI 引数、コンソールのエンコーディングとバッファ設定 |
 | `Config` | `tau.json` と環境変数から設定を読み、未知のキーを保持して保存 |
-| `Json` | 外部ライブラリなしの JSON 解析・生成 |
+| `Json` | .NET 標準の System.Text.Json による JSON 解析・生成 |
 | `SessionStore` | `%APPDATA%\tau-cli\sessions` への保存・読み込み・削除 |
 | `LlmClient` | HTTP 通信、SSE ストリーミング、TLS、再試行、キャンセル |
 | `ToolExecutor` | ツールの定義と実行（ファイル操作・シェルなど） |
