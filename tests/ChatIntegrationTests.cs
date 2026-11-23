@@ -277,7 +277,7 @@ namespace Tau.Tests
             d["myCustomKey"] = "keep-me";
             File.WriteAllText(runner.ConfigPath, Json.ToString(d), Encoding.UTF8);
 
-            runner.Run("/set model other\n/exit\n");
+            runner.Run("", new[] { "--config", "set", "model", "other" });
 
             string after = File.ReadAllText(runner.ConfigPath, Encoding.UTF8);
             Assert.Contains("myCustomKey", after);
@@ -296,7 +296,7 @@ namespace Tau.Tests
             d["models"] = models;
             File.WriteAllText(runner.ConfigPath, Json.ToString(d), Encoding.UTF8);
 
-            runner.Run("/set model other\n/exit\n");
+            runner.Run("", new[] { "--config", "set", "model", "other" });
 
             string after = File.ReadAllText(runner.ConfigPath, Encoding.UTF8);
             Assert.DoesNotContain("\"models\"", after);

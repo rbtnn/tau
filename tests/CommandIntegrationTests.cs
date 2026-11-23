@@ -7,7 +7,7 @@ using Xunit;
 
 namespace Tau.Tests
 {
-    // 対話中のコマンド(/model /tools /config /delete /open /clear など)。
+    // 対話中のコマンド(/tools /new /list /open /delete /clear など)。
     [Collection("env")]
     public class CommandIntegrationTests : IDisposable
     {
@@ -33,35 +33,6 @@ namespace Tau.Tests
             return Json.Parse(raw) as Dictionary<string, object>;
         }
 
-        // ---------------- /model ----------------
-
-        [Fact]
-        public void ModelCommandShowsCurrentModel()
-        {
-            runner.WriteConfig(llm.Url, model: "gpt-x");
-            string output = runner.Run("/model\n/exit\n");
-            Assert.Contains("gpt-x", output);
-        }
-
-        [Fact]
-        public void ModelCommandSwitchesAndSaves()
-        {
-            runner.WriteConfig(llm.Url, model: "old");
-            runner.Run("/model new-model\n/exit\n");
-
-            Dictionary<string, object> cfg = ReadConfig();
-            Assert.Equal("new-model", Json.AsString(cfg["model"]));
-        }
-
-        [Fact]
-        public void ModelCommandAcceptsUnregisteredName()
-        {
-            // models 一覧を持たないので、任意の名前を受け付ける
-            runner.WriteConfig(llm.Url, model: "old");
-            runner.Run("/model anything-goes\n/exit\n");
-            Assert.Equal("anything-goes", Json.AsString(ReadConfig()["model"]));
-        }
-
         // ---------------- /tools ----------------
 
         [Fact]
@@ -83,65 +54,24 @@ namespace Tau.Tests
             Assert.Equal("false", Json.AsString(ReadConfig()["allowTools"]));
         }
 
-        // ---------------- /set ----------------
-
-        [Fact]
-        public void SetChangesASingleValue()
-        {
-            runner.WriteConfig(llm.Url);
-            runner.Run("/set model via-set\n/exit\n");
-            Assert.Equal("via-set", Json.AsString(ReadConfig()["model"]));
-        }
-
-        [Fact]
-        public void SetRejectsInvalidChoice()
-        {
-            runner.WriteConfig(llm.Url);
-            string output = runner.Run("/set inputEncoding bogus\n/exit\n");
-            Assert.Contains("Invalid value", output);
-        }
+        // ---------------- 削除したコマンド ----------------
+        //
+        // /model /set /config は廃止し、--config に一本化した。
 
         [Theory]
-        [InlineData("shift-jis")]
-        [InlineData("utf-8")]
-        [InlineData("default")]
-        public void SetInputEncodingSaves(string name)
+        [InlineData("/model")]
+        [InlineData("/model gpt-4o")]
+        [InlineData("/set model x")]
+        [InlineData("/config")]
+        [InlineData("/config edit")]
+        public void RemovedCommandsAreRejected(string cmd)
         {
             runner.WriteConfig(llm.Url);
-            runner.Run("/set inputEncoding " + name + "\n/exit\n");
-            Assert.Equal(name, Json.AsString(ReadConfig()["inputEncoding"]));
+            string output = runner.Run(cmd + "\n/exit\n");
+            Assert.Contains("Unknown command", output);
         }
 
-        [Fact]
-        public void Cp932AliasBecomesShiftJis()
-        {
-            runner.WriteConfig(llm.Url);
-            runner.Run("/set inputEncoding cp932\n/exit\n");
-            Assert.Equal("shift-jis", Json.AsString(ReadConfig()["inputEncoding"]));
-        }
-
-        // ---------------- /config ----------------
-
-        [Fact]
-        public void ConfigShowsInputEncoding()
-        {
-            runner.WriteConfig(llm.Url);
-            string output = runner.Run("/config\n/exit\n");
-            Assert.Contains("inputEncoding", output);
-        }
-
-        [Fact]
-        public void ConfigEditChangesSystemPrompt()
-        {
-            runner.WriteConfig(llm.Url);
-            runner.Run("/config edit\n/exit\n",
-                extraEnv: null);
-            // /config edit は対話形式なので、直接設定を書き換えて確認する
-            Dictionary<string, object> cfg = ReadConfig();
-            Assert.True(cfg.ContainsKey("systemPrompt") || cfg.Count > 0);
-        }
-
-        // ---------------- /new /sessions /open /delete /clear ----------------
+        // ---------------- /new /list /open /delete /clear ----------------
 
         [Fact]
         public void NewCreatesSeparateSessions()

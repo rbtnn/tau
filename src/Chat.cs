@@ -247,14 +247,11 @@ namespace Tau
             ("list", 1),     // /l
             ("open", 1),     // /o
             ("delete", 1),   // /d
-            ("clear", 2),    // /cl (c は config と衝突するため 2 文字必要)
+            ("clear", 1),    // /c
             ("tools", 1),    // /t
             ("exit", 1),     // /e
             ("quit", 1),     // /q
             ("help", 1),     // /h
-            ("model", 1),    // /m
-            ("config", 2),   // /co (c は clear と衝突するため 2 文字必要)
-            ("set", 2),      // /se (s は単独では曖昧)
         };
 
         // 省略されたコマンド名を解決する。見つからなければ null。
@@ -390,80 +387,10 @@ namespace Tau
                     }
                     return true;
 
-                case "/model":
-                    if (arg.Length == 0)
-                    {
-                        Console.WriteLine("  Current model: " + cfg.Model);
-                        ConsoleUi.Dim("  Change: /model <name>\n");
-                        return true;
-                    }
-                    cfg.Model = arg;
-                    cfg.Save();
-                    ConsoleUi.Info("Switched model: " + cfg.Model);
-                    return true;
-
                 case "/tools":
                     cfg.AllowTools = !cfg.AllowTools;
                     cfg.Save();
                     ConsoleUi.Info("Tools: " + (cfg.AllowTools ? "on" : "off"));
-                    return true;
-
-                case "/config":
-                    {
-                        string sub = arg.Trim().ToLowerInvariant();
-                        if (sub == "edit" || sub == "e")
-                        {
-                            Settings.Edit(cfg);
-                        }
-                        else if (sub.Length == 0)
-                        {
-                            Settings.Show(cfg);
-                        }
-                        else
-                        {
-                            ConsoleUi.Danger("Usage: /config [edit]\n");
-                        }
-                    }
-                    return true;
-
-                case "/set":
-                    {
-                        if (arg.Length == 0)
-                        {
-                            ConsoleUi.Dim("  Usage: /set <key> <value>\n");
-                            ConsoleUi.Dim("  e.g. /set model gpt-4o\n");
-                            ConsoleUi.Dim("      /set allowTools false\n");
-                            ConsoleUi.Dim("      /set contextWindow 128000\n");
-                            ConsoleUi.Dim("  See /config for the list of keys\n");
-                            return true;
-                        }
-                        // "<key> <value>" を分割する(値に空白を含められるようにする)
-                        int sp = arg.IndexOf(' ');
-                        string key = (sp < 0) ? arg : arg.Substring(0, sp);
-                        string value = (sp < 0) ? "" : arg.Substring(sp + 1);
-
-                        Settings.Field f = Settings.Find(key);
-                        if (f == null)
-                        {
-                            ConsoleUi.Danger("Unknown setting: " + key + "\n");
-                            ConsoleUi.Dim("  Use /config to list the settings\n");
-                            return true;
-                        }
-                        if (value.Trim().Length == 0 && f.Kind != "string" && f.Kind != "secret")
-                        {
-                            ConsoleUi.Dim("  Current value: " + Settings.Display(cfg, f) + "\n");
-                            ConsoleUi.Dim("  Usage: /set " + f.Key + " <value>\n");
-                            return true;
-                        }
-                        if (!Settings.Apply(cfg, f, value))
-                        {
-                            ConsoleUi.Danger("Invalid value: " + value + "\n");
-                            ConsoleUi.Dim("  Current value: " + Settings.Display(cfg, f) + "\n");
-                            return true;
-                        }
-                        cfg.Save();
-                        ConsoleUi.Info(f.Key + " = " + Settings.Display(cfg, f) + "  (updated)");
-                    }
                     return true;
 
                 default:

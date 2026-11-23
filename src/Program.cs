@@ -649,11 +649,8 @@ namespace Tau
             Console.WriteLine("  /l[ist]            List saved sessions");
             Console.WriteLine("  /o[pen] <n|id>     Open a session by number or id");
             Console.WriteLine("  /d[elete] <n|id>   Delete a session by number or id");
-            Console.WriteLine("  /cl[ear]           Clear the current session's history");
+            Console.WriteLine("  /c[lear]           Clear the current session's history");
             Console.WriteLine("  /t[ools]           Toggle tool execution on/off");
-            Console.WriteLine("  /m[odel] [name]    Show or switch the model");
-            Console.WriteLine("  /co[nfig] [edit]   Show the settings, or edit them");
-            Console.WriteLine("  /se[t] <k> <v>     Change a single setting (e.g. /set model gpt-4o)");
             Console.WriteLine("  /h[elp]            Show this help");
             Console.WriteLine("  /e[xit], /q[uit]   Exit (Ctrl+D also works)");
             Console.WriteLine();

@@ -162,7 +162,7 @@ namespace Tau.Tests
         public void InputEncodingIsSavedAndUsed()
         {
             runner.WriteConfig(llm.Url);
-            runner.Run("/set inputEncoding utf-8\n/exit\n");
+            runner.Run("", new[] { "--config", "set", "inputEncoding", "utf-8" });
 
             string raw = File.ReadAllText(runner.ConfigPath, Encoding.UTF8);
             Assert.Contains("utf-8", raw);

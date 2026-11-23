@@ -258,9 +258,6 @@ namespace Tau.Tests
         [InlineData("/t")]
         [InlineData("/to")]
         [InlineData("/tools")]
-        [InlineData("/m")]
-        [InlineData("/mo")]
-        [InlineData("/model")]
         [InlineData("/h")]
         [InlineData("/he")]
         [InlineData("/help")]
@@ -270,15 +267,10 @@ namespace Tau.Tests
         [InlineData("/q")]
         [InlineData("/qu")]
         [InlineData("/quit")]
+        [InlineData("/c")]
         [InlineData("/cl")]
         [InlineData("/cle")]
         [InlineData("/clear")]
-        [InlineData("/co")]
-        [InlineData("/con")]
-        [InlineData("/config")]
-        [InlineData("/s")]
-        [InlineData("/se")]
-        [InlineData("/set")]
         public void AbbreviationsAreAccepted(string cmd)
         {
             runner.WriteConfig(llm.Url);
@@ -288,15 +280,15 @@ namespace Tau.Tests
         }
 
         [Fact]
-        public void SingleLetterCIsRejectedAsAmbiguous()
+        public void RemovedChatCommandsAreRejected()
         {
-            // /c は /cl[ear] と /co[nfig] の両方に一致するのでエラー
+            // /model /set /config は廃止し、--config に一本化した
             runner.WriteConfig(llm.Url);
-            string output = runner.Run("/c\n/exit\n");
-
-            Assert.Contains("Unknown command: /c", output);
-            Assert.Contains("/cl", output);
-            Assert.Contains("/co", output);
+            foreach (string cmd in new[] { "/model", "/m", "/set", "/s", "/config", "/co" })
+            {
+                string output = runner.Run(cmd + "\n/exit\n");
+                Assert.Contains("Unknown command: " + cmd, output);
+            }
         }
 
         [Fact]
@@ -308,29 +300,13 @@ namespace Tau.Tests
         }
 
         [Fact]
-        public void ClResolvesToClear()
+        public void CResolvesToClear()
         {
             runner.WriteConfig(llm.Url);
             runner.Run("消す会話\n/exit\n");
 
-            string output = runner.Run("/cl\ny\n/exit\n");
+            string output = runner.Run("/c\ny\n/exit\n");
             Assert.Contains("Cleared the session history", output);
-        }
-
-        [Fact]
-        public void CoResolvesToConfig()
-        {
-            runner.WriteConfig(llm.Url);
-            string output = runner.Run("/co\n/exit\n");
-            Assert.Contains("Config file:", output);
-        }
-
-        [Fact]
-        public void SResolvesToSet()
-        {
-            runner.WriteConfig(llm.Url);
-            runner.Run("/s model via-s\n/exit\n");
-            Assert.Equal("via-s", Json.AsString(ReadConfig()["model"]));
         }
 
         // ---------------- ヘルプの表記 ----------------
@@ -344,7 +320,7 @@ namespace Tau.Tests
             Assert.Contains("/l[ist]", output);
             Assert.Contains("/o[pen]", output);
             Assert.Contains("/d[elete]", output);
-            Assert.Contains("/cl[ear]", output);
+            Assert.Contains("/c[lear]", output);
             Assert.Contains("/t[ools]", output);
             Assert.Contains("/e[xit]", output);
             Assert.Contains("/q[uit]", output);

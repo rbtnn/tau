@@ -87,20 +87,22 @@ tau.exe --config edit
 | `/l[ist]` | 保存済みセッションの一覧（番号付き） |
 | `/o[pen] <n\|id>` | セッションを開く（番号は `/list` のもの） |
 | `/d[elete] <n\|id>` | セッションを削除（確認あり） |
-| `/cl[ear]` | 現在のセッションの会話履歴をクリア（確認あり） |
+| `/c[lear]` | 現在のセッションの会話履歴をクリア（確認あり） |
 | `/t[ools]` | ツール実行の on/off を切り替え |
-| `/m[odel] [名]` | モデルを表示／切り替え（設定ファイルにも保存） |
-| `/co[nfig] [edit]` | 設定を表示／対話形式で変更 |
-| `/se[t] <key> <value>` | 設定を 1 項目だけ変更 |
 | `/h[elp]` | ヘルプを表示 |
 | `/e[xit]`, `/q[uit]` | 終了（`Ctrl+D` でも終了） |
 
 `[ ]` は **Vim のヘルプと同じ書き方**で、省略できる部分を表します。
 `/n` でも `/ne` でも `/new` でも同じコマンドです。
 
-**`/c` は使えません。** `/cl[ear]` と `/co[nfig]` の両方に一致して曖昧なため、
-エラーになります（候補として `/cl` と `/co` を案内します）。
-`/s` は `/se[t]` しか候補が無いので使えます。
+モデルやツールなどの設定変更は **`--config`** に一本化しました。
+`/model` `/set` `/config` は廃止しています。
+
+```
+tau.exe --config show
+tau.exe --config set model gpt-4o
+tau.exe --config edit
+```
 
 ### セッションの内容をクリア
 
@@ -308,26 +310,25 @@ TAU_CONFIG
 
 - モデルは `model` に**1 つだけ**指定します。`models`（モデル名の一覧）は `tau` では使いません。
   接続先・API キー・コンテキスト上限も共通の 1 つです。
-- `/model <名前>` は任意のモデル名を受け付けます（事前登録は不要）。
+- モデル名は任意の名前を受け付けます（事前登録は不要）。
 - 既存の `tau.json` に `models` があっても無視され、保存時に取り除かれます
   （`agentweb` 側の `models` はそのまま残ります）。
 - `tau` が扱わないキーを手で追記しても、保存時に失われません。
 
-### プロンプトから設定を変更する
+### 設定を変更する
 
-`tau.json` を直接編集しなくても、対話中に設定を変更できます。
+`tau.json` を直接編集しなくても、コマンドラインから設定を変更できます。
 
 | コマンド | 説明 |
 |---|---|
-| `/config` | 現在の設定を一覧表示（API キーは伏せ字） |
+| `--config show` | 現在の設定を一覧表示（API キーは伏せ字） |
 | `--config edit` | 番号を選んで 1 項目ずつ対話形式で変更 |
-| `/set <key> <value>` | 1 項目だけ変更 |
-| `/model [名]` | モデルの表示・切り替え |
-| `/tools` | ツール実行の on/off を切り替え |
+| `--config set <k> <v>` | 1 項目だけ変更 |
+| `/tools` | 対話中にツール実行の on/off を切り替え |
 
 ```
-> /config
-  設定ファイル: C:\Users\...\AppData\Roaming\tau\tau.json
+> tau.exe --config show
+  Config file: C:\Users\...\AppData\Roaming\tau-cli\tau.json
 
     llmApiUrl          = https://api.openai.com/v1/chat/completions
     llmApiKey          = sk-...********
@@ -337,11 +338,11 @@ TAU_CONFIG
     contextWindow      = 64000
     ...
 
-> /set model gpt-4o
-  · model = gpt-4o  に変更しました
+> tau.exe --config set model gpt-4o
+  · model = gpt-4o  (updated)
 
-> /set contextWindow 128000
-  · contextWindow = 128000  に変更しました
+> tau.exe --config set contextWindow 128000
+  · contextWindow = 128000  (updated)
 
 > tau.exe --config edit
   1. llmApiUrl          = https://...
@@ -356,7 +357,7 @@ TAU_CONFIG
   · model = gpt-4o-mini  に変更しました
 ```
 
-変更は即座に `tau.json` へ保存され、次のターンから反映されます。
+変更は即座に `tau.json` へ保存され、次回の起動から反映されます。
 `systemPrompt` だけは**複数行**で入力できます（空行で終了）。
 
 入力チェックも行います（不明な key、数値でない値、不正な真偽値は拒否）。
@@ -1033,7 +1034,7 @@ Python は不要です。
 | ファイル | 内容 |
 |---|---|
 | `tests/ChatIntegrationTests.cs` | ストリーミング・ツールループ・セッション・エラー処理 |
-| `tests/CommandIntegrationTests.cs` | `/model` `/tools` `/set` `/open` `/delete` `/clear` |
+| `tests/CommandIntegrationTests.cs` | `/tools` `/open` `/delete` `/clear`・廃止コマンドの拒否 |
 | `tests/EncodingIntegrationTests.cs` | 日本語・NUL・長文入力・`--test` |
 | `tests/WebIntegrationTests.cs` | `--web` の画面・SSE・CSRF 拒否・404 |
 | `tests/OutputIntegrationTests.cs` | 改行・進行状況・データ移行・デバッグ出力 |
@@ -1240,11 +1241,11 @@ tau-cli/  (= リポジトリ直下)
 | `LlmClient` | HTTP 通信、SSE ストリーミング、TLS、再試行、キャンセル |
 | `ToolExecutor` | ツールの定義と実行（ファイル操作・シェルなど） |
 | `Agent` | 1 ターンの実行、ツール呼び出しのループ、文脈の圧縮 |
-| `Chat` | 対話ループ、コマンド（`/help` `/config` `/clear` など） |
+| `Chat` | 対話ループ、コマンド（`/help` `/clear` `/tools` など） |
 | `ConsoleUi` | 色付き・太字・淡色の出力 |
 | `LineEditor` | 入力の読み取り、コンソールの行編集モード、クリップボード |
 | `MarkdownRenderer` | 見出し・太字・表などを ANSI と罫線で整形 |
-| `Settings` | `/config` の表示と `--config edit` の対話編集 |
+| `Settings` | 設定の表示・変更（`--config show/set/edit`） |
 | `Diagnostics` | 接続診断（`--test` から呼ばれる） |
 | `SelfTest` | `--test` の自己診断テスト |
 
