@@ -93,6 +93,13 @@ namespace Tau
         }
 
         // ツール実行の内容を 1 行にまとめる(表示・保存用)
+        // 履歴の表示用。ツール名と引数 JSON から詳細文字列を作る。
+        // ToolDetail は private なので、Chat から使えるよう公開する。
+        public static string ToolDetailOf(string name, string argsJson)
+        {
+            return ToolDetail(name, argsJson);
+        }
+
         static string ToolDetail(string name, string argsJson)
         {
             if (argsJson == null || argsJson.Length == 0) return "";
@@ -141,7 +148,9 @@ namespace Tau
         static List<object> BuildEffectiveMessages(Config cfg, SessionCtx ctx)
         {
             List<object> eff = new();
-            eff.Add(Msg("system", ComposeSystem(cfg.SystemPrompt, ctx.Summary)));
+            // メモリは全セッション共通。システムプロンプトに含めて渡す。
+            string sys = ComposeSystem(cfg.SystemPrompt, ctx.Summary);
+            eff.Add(Msg("system", Memory.Compose(sys, Memory.Load())));
             if (ctx.ContextStart < 0) ctx.ContextStart = 0;
             for (int i = ctx.ContextStart; i < ctx.Messages.Count; i++)
                 eff.Add(ctx.Messages[i]);

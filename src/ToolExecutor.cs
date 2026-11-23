@@ -116,9 +116,18 @@ namespace Tau
                         Json.AsString(Get(args, "method")),
                         args.ContainsKey("headers") ? args["headers"] : null,
                         Json.AsString(Get(args, "body")));
+                case "memory_read":
+                    return MemoryRead(cfg);
+                case "memory_write":
+                    return MemoryWrite(Json.AsString(Get(args, "text")), cfg);
+                case "memory_append":
+                    return MemoryAppend(Json.AsString(Get(args, "text")), cfg);
+                case "memory_clear":
+                    return MemoryClear(cfg);
                 default:
                     return Err("unknown tool: " + name
-                        + " (available: shell/read_file/write_file/list_dir/curl)");
+                        + " (available: shell/read_file/write_file/list_dir/curl"
+                        + "/memory_read/memory_write/memory_append/memory_clear)");
             }
         }
 
@@ -200,6 +209,39 @@ namespace Tau
                     new string[] { "headers", "object", "Additional HTTP headers" },
                     new string[] { "body", "string", "Request body" }
                 }));
+
+            // ---- メモリ ----
+            //
+            // システムプロンプトとは別に、セッションをまたいで残したい
+            // 覚え書きを読み書きする。容量には上限がある。
+            tools.Add(Func("memory_read",
+                "Read your saved memory. The memory is shared across all sessions "
+                + "and is already included in your system prompt, but you can call "
+                + "this to see the exact current contents and remaining capacity.",
+                new string[] { },
+                new string[][] { }));
+
+            tools.Add(Func("memory_write",
+                "Replace your entire saved memory with new text. Use it to record "
+                + "facts worth keeping across sessions (user preferences, project "
+                + "conventions, decisions). Keep it short; it has a size limit.",
+                new string[] { "text" },
+                new string[][] {
+                    new string[] { "text", "string", "The new memory contents (replaces everything)" }
+                }));
+
+            tools.Add(Func("memory_append",
+                "Append a line to your saved memory, keeping what is already there. "
+                + "Prefer this over memory_write when adding a new note.",
+                new string[] { "text" },
+                new string[][] {
+                    new string[] { "text", "string", "Text to append (a newline is added)" }
+                }));
+
+            tools.Add(Func("memory_clear",
+                "Erase your saved memory. Only do this when the user asks for it.",
+                new string[] { },
+                new string[][] { }));
 
             return tools;
         }
@@ -469,6 +511,58 @@ namespace Tau
             if (s == null) return "";
             if (s.Length > MAX_OUTPUT) s = s.Substring(0, MAX_OUTPUT) + "\n...[output truncated]";
             return s;
+        }
+
+        // ---------------- メモリ ----------------
+
+        static string MemoryRead(Config cfg)
+        {
+            string text = Memory.Load();
+            Dictionary<string, object> d = new();
+            d["ok"] = true;
+            d["memory"] = text;
+            d["usage"] = Memory.Usage(text, cfg);
+            return Json.ToString(d);
+        }
+
+        static string MemoryWrite(string text, Config cfg)
+        {
+            string error;
+            if (!Memory.Save(text, cfg, out error)) return Err(error);
+
+            Dictionary<string, object> d = new();
+            d["ok"] = true;
+            d["usage"] = Memory.Usage(text, cfg);
+            return Json.ToString(d);
+        }
+
+        static string MemoryAppend(string text, Config cfg)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return Err("text is empty");
+
+            string current = Memory.Load();
+            StringBuilder sb = new(current);
+            if (sb.Length > 0 && sb[sb.Length - 1] != '\n') sb.Append('\n');
+            sb.Append(text.Trim());
+
+            string error;
+            if (!Memory.Save(sb.ToString(), cfg, out error)) return Err(error);
+
+            Dictionary<string, object> d = new();
+            d["ok"] = true;
+            d["usage"] = Memory.Usage(sb.ToString(), cfg);
+            return Json.ToString(d);
+        }
+
+        static string MemoryClear(Config cfg)
+        {
+            string error;
+            if (!Memory.Clear(cfg, out error)) return Err(error);
+
+            Dictionary<string, object> d = new();
+            d["ok"] = true;
+            d["usage"] = Memory.Usage("", cfg);
+            return Json.ToString(d);
         }
 
         static string Err(string message)

@@ -57,6 +57,8 @@ namespace Tau
                 Help = "Tokens reserved for the reply" },
             new Field { Key = "keepRecentTokens", Label = "Keep Recent Tokens", Kind = "int",
                 Help = "Recent tokens kept without summarising" },
+            new Field { Key = "memoryMaxChars", Label = "Memory Limit (chars)", Kind = "int",
+                Help = "Maximum size of the agent's saved memory (characters)" },
             new Field { Key = "maxToolsPerTurn", Label = "Max Tools Per Turn", Kind = "int",
                 Help = "Maximum tools executed per turn" },
             new Field { Key = "toolTimeoutSec", Label = "Tool Timeout (sec)", Kind = "int",
@@ -160,6 +162,7 @@ namespace Tau
                         if (f.Key == "contextWindow") cfg.ContextWindow = n;
                         else if (f.Key == "reserveTokens") cfg.ReserveTokens = n;
                         else if (f.Key == "keepRecentTokens") cfg.KeepRecentTokens = n;
+                        else if (f.Key == "memoryMaxChars") cfg.MemoryMaxChars = n;
                         else if (f.Key == "maxToolsPerTurn") cfg.MaxToolsPerTurn = n;
                         else if (f.Key == "toolTimeoutSec") cfg.ToolTimeoutSec = n;
                         return true;

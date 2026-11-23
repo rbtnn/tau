@@ -873,7 +873,7 @@ ANSI エスケープが使える環境（Windows 10 以降のコンソール、U
 
 ### ツール実行（Function Calling）
 
-`agentweb` と同じ 5 つのツールが使えます。
+次のツールが使えます。
 
 | ツール名 | 説明 | 引数 |
 |---|---|---|
@@ -882,9 +882,68 @@ ANSI エスケープが使える環境（Windows 10 以降のコンソール、U
 | `write_file` | ファイルへ書き込む | `path`, `content` |
 | `list_dir` | ディレクトリ一覧を返す | `path`, `pattern`? |
 | `curl` | HTTP/HTTPS リクエスト送信（プロキシ設定を反映） | `url`, `method`?, `headers`?, `body`? |
+| `memory_read` | メモリを読む | なし |
+| `memory_write` | メモリを置き換える | `text` |
+| `memory_append` | メモリに追記する | `text` |
+| `memory_clear` | メモリを消す | なし |
 
-ツール実行は `▶ ツール実行: <name>  <detail>` として 1 行で表示され、
-実行記録はセッションの `steps` に保存され、`/open` で再開したときにも表示されます。
+ツール実行は `▶ Tool: <name>  <detail>` として 1 行で表示されます。
+再起動して履歴を表示するときも、同じ形式で詳細まで表示します
+（引数は直前の `tool_calls` から復元します）。
+
+---
+
+## メモリ機能
+
+**システムプロンプトとは別に、エージェントが自分で読み書きする覚え書き**です。
+すべてのセッションで共通なので、別の会話で決めたことを次の会話へ引き継げます。
+
+| 項目 | 内容 |
+|---|---|
+| 保存先 | `%APPDATA%\tau-cli\memory.json`（Linux は `~/.config/tau-cli/memory.json`） |
+| 容量 | `memoryMaxChars`（既定 **8000 文字**） |
+| 操作 | エージェントが `memory_read` / `memory_write` / `memory_append` / `memory_clear` で行う |
+
+### どう動くか
+
+1. メモリの内容は**毎回システムプロンプトに含めて** LLM へ渡します
+   （`[Memory]` セクションとして末尾に付きます）
+2. エージェントは必要と判断したとき、自分でメモリを更新します
+   （「覚えておいて」と言われたときなど）
+3. 更新はすぐに `memory.json` へ保存され、次のターンから反映されます
+
+```
+> このプロジェクトはタブ幅 4 で、C# を使っています。覚えておいて
+  ▶ Tool: memory_append  このプロジェクトはタブ幅 4、C# を使用
+  · 覚えました。
+
+（別のセッションを開く）
+> このプロジェクトの規約は？
+  タブ幅 4 で C# ですね。
+```
+
+### 容量の制限
+
+`memoryMaxChars` を超える書き込みは**拒否**されます。
+
+```json
+{"error":"memory is too long (200 chars, limit 100). Shorten it or raise memoryMaxChars."}
+```
+
+上限は変更できます。
+
+```
+tau.exe --config set memoryMaxChars 4000
+```
+
+### セッションとの違い
+
+| | メモリ | セッション |
+|---|---|---|
+| 範囲 | **全セッション共通** | セッションごと |
+| 内容 | エージェントが選んだ要点だけ | 会話そのもの |
+| 消えると | 手動で消すまで残る | `/delete` で消える |
+| 容量 | 上限あり（既定 8000 文字） | 上限なし（自動で要約） |
 
 ### TLS（HTTPS 接続）
 
@@ -1107,9 +1166,11 @@ Python は不要です。
 | `tests/MultiLineInputTests.cs` | パイプ入力の複数行・コマンドでの区切り |
 | `tests/ExecuteOptionTests.cs` | `-e` の実行・セッション非保存・出力の整形 |
 | `tests/CompactionTests.cs` | ツール反復上限でのコンパクションと続行 |
+| `tests/MemoryTests.cs` | メモリの保存・容量制限・システムプロンプトへの埋め込み |
+| `tests/HistoryDisplayTests.cs` | 再起動後の履歴でツール詳細が出るか |
 
 ```
-Passed!  - Failed: 0, Passed: 379, Skipped: 0, Total: 379
+Passed!  - Failed: 0, Passed: 410, Skipped: 0, Total: 410
 ```
 
 所要時間は約 30 秒です。
@@ -1274,6 +1335,7 @@ tau-cli/  (= リポジトリ直下)
     Config.cs               設定（tau.json）と環境変数
     Json.cs                 JSON の解析・生成（System.Text.Json 経由）
     SessionStore.cs         セッションの保存・読み込み・削除
+    Memory.cs               メモリ（全セッション共通の覚え書き）
     ProxyHelper.cs          プロキシ設定
     LlmResp.cs              LLM 応答の入れ物
     LlmCancelledException.cs 中断を表す例外

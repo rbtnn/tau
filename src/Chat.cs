@@ -655,12 +655,27 @@ namespace Tau
             Console.WriteLine();
             ConsoleUi.Dim("---- conversation so far ----");
             Console.WriteLine();
+
+            // 直前の assistant の tool_calls から引数を覚えておき、
+            // 続く tool メッセージの詳細表示に使う。
+            Dictionary<string, string> callArgs = new();
+
+            // tool メッセージが保存されているか調べる。
+            // 保存されていれば、そこから「▶ Tool: 名前  詳細」を出せるので
+            // steps(要約)は出さない。同じ呼び出しを二重に表示しないため。
+            bool hasToolMessages = false;
             foreach (object o in c.Messages)
             {
                 Dictionary<string, object> m = o as Dictionary<string, object>;
+                if (m != null && Json.AsString(m["role"]) == "tool") { hasToolMessages = true; break; }
+            }
+
+            for (int idx = 0; idx < c.Messages.Count; idx++)
+            {
+                Dictionary<string, object> m = c.Messages[idx] as Dictionary<string, object>;
                 if (m == null) continue;
-                string role = m.ContainsKey("role") ? Json.AsString(m["role"]) : "";
-                string content = m.ContainsKey("content") ? Json.AsString(m["content"]) : "";
+                string role = Json.AsString(m.ContainsKey("role") ? m["role"] : "");
+                string content = Json.AsString(m.ContainsKey("content") ? m["content"] : "");
 
                 if (role == "user")
                 {
@@ -669,16 +684,37 @@ namespace Tau
                 }
                 else if (role == "assistant")
                 {
-                    // 思考 → ツール実行 → 本文 の順に、それぞれ改行して表示する
+                    // ツール呼び出しの引数を覚えておく(続く tool の表示用)
+                    if (m.ContainsKey("tool_calls") && m["tool_calls"] is List<object> tcs)
+                    {
+                        foreach (object tco in tcs)
+                        {
+                            Dictionary<string, object> tc = tco as Dictionary<string, object>;
+                            if (tc == null) continue;
+                            string cid = tc.ContainsKey("id") ? Json.AsString(tc["id"]) : "";
+                            Dictionary<string, object> fn = tc.ContainsKey("function")
+                                ? tc["function"] as Dictionary<string, object> : null;
+                            if (fn == null) continue;
+                            object av = fn.ContainsKey("arguments") ? fn["arguments"] : null;
+                            string args = (av is string) ? (string)av
+                                : (av != null ? Json.ToString(av) : "");
+                            if (cid.Length > 0) callArgs[cid] = args;
+                        }
+                    }
+
+                    // 思考
                     if (m.ContainsKey("think"))
                     {
                         string think = Json.AsString(m["think"]);
                         if (think.Trim().Length > 0)
                             ConsoleUi.Think("  [thinking] " + think + "\n");
                     }
-                    if (m.ContainsKey("steps") && m["steps"] is List<object>)
+
+                    // ツール実行の要約。tool メッセージが保存されている場合は
+                    // そちらで詳細まで出るので、ここでは出さない(二重表示を防ぐ)。
+                    if (!hasToolMessages
+                        && m.ContainsKey("steps") && m["steps"] is List<object> steps)
                     {
-                        List<object> steps = (List<object>)m["steps"];
                         for (int i = 0; i < steps.Count; i++)
                         {
                             string st = Json.AsString(steps[i]);
@@ -686,6 +722,7 @@ namespace Tau
                                 ConsoleUi.Dim("  ▶ " + st + "\n");
                         }
                     }
+
                     if (content.Trim().Length > 0)
                     {
                         MarkdownRenderer.Render(content);
@@ -695,7 +732,14 @@ namespace Tau
                 else if (role == "tool")
                 {
                     string nn = m.ContainsKey("name") ? Json.AsString(m["name"]) : "";
-                    ConsoleUi.Dim("  [tool result] " + nn + "\n");
+                    string id = m.ContainsKey("tool_call_id") ? Json.AsString(m["tool_call_id"]) : "";
+
+                    // 実行時と同じ「▶ Tool: 名前  詳細」で表示する。
+                    // 引数は直前の assistant の tool_calls から取る。
+                    string detail = "";
+                    if (id.Length > 0 && callArgs.ContainsKey(id))
+                        detail = Agent.ToolDetailOf(nn, callArgs[id]);
+                    ConsoleUi.Tool(nn, detail);
                 }
             }
             ConsoleUi.Dim("---- continue below ----");

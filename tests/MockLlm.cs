@@ -199,11 +199,12 @@ namespace Tau.Tests
         }
 
         /// <summary>ツール呼び出しの delta を作る。</summary>
-        public static Dictionary<string, object> ToolCall(string id, string name, string argsJson)
+        public static Dictionary<string, object> ToolCall(string id, string name, string argsJson,
+                                                          int index = 0)
         {
             List<object> calls = new();
             Dictionary<string, object> c = new();
-            c["index"] = 0;
+            c["index"] = index;
             c["id"] = id;
             c["type"] = "function";
             Dictionary<string, object> fn = new();

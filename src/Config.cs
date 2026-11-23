@@ -40,6 +40,10 @@ namespace Tau
         public int ReserveTokens;          // 応答用に確保するトークン
         public int KeepRecentTokens;       // 要約せず残す直近トークン数
 
+        // メモリ機能の上限(文字数)。エージェントが自分で読み書きする
+        // 覚え書きの容量。0 以下なら既定値(8000)を使う。
+        public int MemoryMaxChars;
+
         public string ProxyUrl;
         public string ProxyUser;
         public string ProxyPass;
@@ -70,6 +74,7 @@ namespace Tau
             ContextWindow = SafeInt(Env("LLM_CONTEXT_WINDOW", "64000"), 64000);
             ReserveTokens = SafeInt(Env("LLM_RESERVE_TOKENS", "12000"), 12000);
             KeepRecentTokens = SafeInt(Env("LLM_KEEP_RECENT_TOKENS", "20000"), 20000);
+            MemoryMaxChars = SafeInt(Env("TAU_MEMORY_MAX_CHARS", "8000"), 8000);
 
 
             InputEncoding = Env("TAU_INPUT_ENCODING", "shift-jis");
@@ -219,6 +224,7 @@ namespace Tau
             if (Has(m, "contextWindow")) ContextWindow = Json.AsInt(Get(m, "contextWindow"));
             if (Has(m, "reserveTokens")) ReserveTokens = Json.AsInt(Get(m, "reserveTokens"));
             if (Has(m, "keepRecentTokens")) KeepRecentTokens = Json.AsInt(Get(m, "keepRecentTokens"));
+            if (Has(m, "memoryMaxChars")) MemoryMaxChars = Json.AsInt(Get(m, "memoryMaxChars"));
             if (Has(m, "preserveRecentTokens")) KeepRecentTokens = Json.AsInt(Get(m, "preserveRecentTokens"));
             if (Has(m, "proxyUrl")) ProxyUrl = Json.AsString(Get(m, "proxyUrl"));
             if (Has(m, "proxyUser")) ProxyUser = Json.AsString(Get(m, "proxyUser"));
@@ -241,6 +247,7 @@ namespace Tau
             m["contextWindow"] = ContextWindow;
             m["reserveTokens"] = ReserveTokens;
             m["keepRecentTokens"] = KeepRecentTokens;
+            m["memoryMaxChars"] = MemoryMaxChars;
             m["proxyUrl"] = ProxyUrl;
             m["proxyUser"] = ProxyUser;
             m["proxyPass"] = ProxyPass;
