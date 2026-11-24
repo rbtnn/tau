@@ -26,11 +26,21 @@ namespace Tau
     {
         const int MAX_OUTPUT = 32000;   // ツール結果として LLM に返す最大文字数
 
+        internal static int MaxOutputForTests { get { return MAX_OUTPUT; } }
+
+        // read_document が 1 回で返す文字数。MAX_OUTPUT より小さくして、
+        // JSON 全体(キー・エスケープ)を含めてもコンテキストに収める。
+        const int CHUNK_SIZE = 16000;
+
+        internal static int ChunkSizeForTests { get { return CHUNK_SIZE; } }
+
         static object Get(Dictionary<string, object> d, string key)
         {
             if (d != null && d.ContainsKey(key)) return d[key];
             return null;
         }
+
+        internal static string NormalizeNamePublic(string name) { return NormalizeName(name); }
 
         static string NormalizeName(string name)
         {
@@ -66,6 +76,13 @@ namespace Tau
                 case "http":
                 case "fetch":
                     return "curl";
+                case "read_document":
+                case "read_pdf":
+                case "read_docx":
+                case "read_xlsx":
+                case "document":
+                case "extract_text":
+                    return "read_document";
                 default:
                     return name;
             }
@@ -85,6 +102,7 @@ namespace Tau
             if (args == null) args = new();
 
             if (args.ContainsKey("cmd")) return "shell";
+            if (args.ContainsKey("sheet")) return "read_document";
             if (args.ContainsKey("content") && args.ContainsKey("path")) return "write_file";
             if (args.ContainsKey("pattern")) return "list_dir";
             if (args.ContainsKey("path")) return "read_file";
@@ -116,6 +134,12 @@ namespace Tau
                         Json.AsString(Get(args, "method")),
                         args.ContainsKey("headers") ? args["headers"] : null,
                         Json.AsString(Get(args, "body")));
+                case "read_document":
+                    return ReadDocument(Json.AsString(Get(args, "path")),
+                        Json.AsString(Get(args, "sheet")),
+                        Json.AsInt(Get(args, "maxRows")),
+                        Json.AsInt(Get(args, "offset")),
+                        Json.AsInt(Get(args, "limit")));
                 case "memory_read":
                     return MemoryRead(cfg);
                 case "memory_write":
@@ -127,6 +151,7 @@ namespace Tau
                 default:
                     return Err("unknown tool: " + name
                         + " (available: shell/read_file/write_file/list_dir/curl"
+                        + "/read_document"
                         + "/memory_read/memory_write/memory_append/memory_clear)");
             }
         }
@@ -187,6 +212,26 @@ namespace Tau
                 new string[][] {
                     new string[] { "path", "string", "Path of the file to write" },
                     new string[] { "content", "string", "Text to write" }
+                }));
+
+            tools.Add(Func("read_document",
+                "Read the text of a PDF, Word (.docx) or Excel (.xlsx) file. "
+                + "No Office installation is needed; the file is parsed directly. "
+                + "For Excel, every sheet is returned with cells separated by tabs. "
+                + "Use it instead of read_file for these formats. "
+                + "Long documents are returned in chunks: when the result says "
+                + "truncated=true, call it again with the nextOffset value to read the rest.",
+                new string[] { "path" },
+                new string[][] {
+                    new string[] { "path", "string", "Path of the .pdf, .docx or .xlsx file" },
+                    new string[] { "sheet", "string",
+                        "Excel only: the sheet name to read. Defaults to all sheets" },
+                    new string[] { "maxRows", "integer",
+                        "Excel only: maximum rows per sheet. Defaults to 200" },
+                    new string[] { "offset", "integer",
+                        "Start position in characters. Use nextOffset from the previous result to continue" },
+                    new string[] { "limit", "integer",
+                        "Maximum characters to return. Defaults to 16000" }
                 }));
 
             tools.Add(Func("list_dir",
@@ -329,6 +374,86 @@ namespace Tau
             {
                 return Err("write_file failed: " + ex.Message);
             }
+        }
+
+        // PDF / Word / Excel を、COM を使わずに読む。
+        static string ReadDocument(string path, string sheet, int maxRows,
+                                   int offset, int limit)
+        {
+            if (path == null || path.Trim().Length == 0) return Err("path is not specified");
+            path = path.Trim();
+
+            if (!File.Exists(path)) return Err("file does not exist: " + path);
+
+            string kind = OfficeReader.Kind(path);
+            if (kind.Length == 0)
+            {
+                return Err("unsupported file type: " + Path.GetExtension(path)
+                    + " (read_document handles .pdf, .docx and .xlsx)");
+            }
+            if (kind == "legacy")
+            {
+                return Err("the old binary format (" + Path.GetExtension(path)
+                    + ") is not supported. Open it once in Office and save it as "
+                    + "PDF, .docx or .xlsx.");
+            }
+
+            string text = null;
+            string error = null;
+            Dictionary<string, object> d = new();
+            d["ok"] = true;
+            d["path"] = Path.GetFullPath(path);
+            d["type"] = kind;
+
+            switch (kind)
+            {
+                case "pdf":
+                    text = PdfReader.ReadText(path, out error);
+                    d["pages"] = PdfReader.CountPages(path);
+                    break;
+                case "word":
+                    text = OfficeReader.ReadWord(path, out error);
+                    break;
+                case "excel":
+                    if (maxRows <= 0) maxRows = 200;
+                    text = OfficeReader.ReadExcel(path, sheet, maxRows, out error);
+                    d["maxRows"] = maxRows;
+                    break;
+                default:
+                    return Err("read_document does not support " + kind + " files yet");
+            }
+
+            if (text == null)
+            {
+                return Err(error ?? "could not read the document");
+            }
+
+            int total = text.Length;
+            d["length"] = total;
+
+            // 大きな文書は分割して返す。1 回で全部を返すと、
+            // コンテキストを溢れさせるため。offset を変えて続きを読む。
+            int start = offset > 0 ? offset : 0;
+            if (start > total) start = total;
+
+            int len = limit > 0 ? limit : CHUNK_SIZE;
+            if (len > MAX_OUTPUT) len = MAX_OUTPUT;
+            if (start + len > total) len = total - start;
+
+            d["offset"] = start;
+            d["returned"] = len;
+            d["content"] = text.Substring(start, len);
+
+            bool more = start + len < total;
+            d["truncated"] = more;
+            if (more)
+            {
+                d["nextOffset"] = start + len;
+                d["hint"] = "The document is longer than one result. Call "
+                    + "read_document again with offset=" + (start + len)
+                    + " to read the rest.";
+            }
+            return Json.ToString(d);
         }
 
         static string ListDir(string path, string pattern)
@@ -516,8 +641,15 @@ namespace Tau
         static string Clip(string s)
         {
             if (s == null) return "";
-            if (s.Length > MAX_OUTPUT) s = s.Substring(0, MAX_OUTPUT) + "\n...[output truncated]";
-            return s;
+            if (s.Length <= MAX_OUTPUT) return s;
+
+            // 上限を超えたら切り詰める。結果全体が上限を超えないよう、
+            // 案内文の分を差し引いて切る。
+            string note = "\n...[output truncated: the result was longer than "
+                + MAX_OUTPUT + " characters]";
+            int keep = MAX_OUTPUT - note.Length;
+            if (keep < 0) keep = 0;
+            return s.Substring(0, keep) + note;
         }
 
         // ---------------- メモリ ----------------

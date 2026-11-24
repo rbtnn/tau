@@ -23,10 +23,18 @@ namespace Tau
             string pattern = Arg(args, "pattern");
             string url = Arg(args, "url");
             string method = Arg(args, "method");
+            string sheet = Arg(args, "sheet");
 
             if (name == "shell") return cmd;
             if (name == "read_file" || name == "write_file" || name == "list_dir")
                 return pattern.Length > 0 ? path + "  [" + pattern + "]" : path;
+            if (name == "read_document")
+            {
+                string detail = sheet.Length > 0 ? path + "  [" + sheet + "]" : path;
+                string offset = Arg(args, "offset");
+                if (offset.Length > 0 && offset != "0") detail += "  @" + offset;
+                return detail;
+            }
             if (name == "curl") return (method.Length > 0 ? method + " " : "") + url;
             if (cmd.Length > 0) return cmd;
             if (path.Length > 0) return path;

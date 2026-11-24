@@ -45,6 +45,11 @@ namespace Tau.Tests
         [InlineData("ｱｲｳｴｵ")]
         [InlineData("、。「」（）")]
         [InlineData("①②③")]
+        [InlineData("商品ID: A-1024 の在庫は 3 個です。")]
+        [InlineData("価格は 1,980 JPY（税込）")]
+        [InlineData("2026年度 第1四半期 売上 12,345 円")]
+        [InlineData("タブ幅は 4、C# を使う。TODO: fix_me_2")]
+        [InlineData("ASCII only 12345")]
         public void JapaneseIsSentToLlm(string text)
         {
             runner.WriteConfig(llm.Url);

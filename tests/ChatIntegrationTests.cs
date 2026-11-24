@@ -119,6 +119,147 @@ namespace Tau.Tests
             Assert.Equal(name, Assert.IsType<Dictionary<string, object>>(call["function"])["name"]);
         }
 
+        // ---------------- 文書の読み取り ----------------
+
+        [Fact]
+        public void ReadDocumentToolSendsTextToTheLlm()
+        {
+            // 日本語と半角英数字が混在する Excel を作り、
+            // エージェントが read_document で読んだ内容を LLM に返すことを確認する。
+            string path = Path.Combine(runner.WorkDir, "mixed.xlsx");
+            using (FileStream fs = new(path, FileMode.Create))
+            using (System.IO.Compression.ZipArchive zip =
+                new(fs, System.IO.Compression.ZipArchiveMode.Create))
+            {
+                AddEntry(zip, "xl/workbook.xml",
+                    "<?xml version=\"1.0\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
+                    + "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">"
+                    + "<sheets><sheet name=\"2026年度 売上\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>");
+                AddEntry(zip, "xl/_rels/workbook.xml.rels",
+                    "<?xml version=\"1.0\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+                    + "<Relationship Id=\"rId1\" Type=\"x\" Target=\"worksheets/sheet1.xml\"/></Relationships>");
+                AddEntry(zip, "xl/sharedStrings.xml",
+                    "<?xml version=\"1.0\"?><sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"
+                    + "<si><t>商品コード</t></si><si><t>商品名</t></si>"
+                    + "<si><t>A-1024</t></si><si><t>りんご L サイズ</t></si></sst>");
+                AddEntry(zip, "xl/worksheets/sheet1.xml",
+                    "<?xml version=\"1.0\"?><worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"
+                    + "<sheetData>"
+                    + "<row r=\"1\"><c r=\"A1\" t=\"s\"><v>0</v></c><c r=\"B1\" t=\"s\"><v>1</v></c></row>"
+                    + "<row r=\"2\"><c r=\"A2\" t=\"s\"><v>2</v></c><c r=\"B2\" t=\"s\"><v>3</v></c></row>"
+                    + "</sheetData></worksheet>");
+            }
+
+            llm.Reply = req => MockLlm.ToolResultCount(req) == 0
+                ? new[] { MockLlm.ToolCall("c1", "read_document",
+                    Json.ToString(new Dictionary<string, object> { ["path"] = path })) }
+                : new[] { new Dictionary<string, object> { ["content"] = "読みました。" } };
+            runner.WriteConfig(llm.Url, allowTools: true);
+
+            string output = runner.Run("この表を読んで\n/exit\n");
+
+            Assert.Contains("読みました。", output);
+            // 実行時と同じ表示になること
+            Assert.Contains("▶ Tool: read_document", output);
+
+            Dictionary<string, object> last = llm.Requests[llm.Requests.Count - 1];
+            var messages = last["messages"] as List<object>;
+            string toolContent = null;
+            foreach (object o in messages)
+            {
+                Dictionary<string, object> m = o as Dictionary<string, object>;
+                if (Json.AsString(m["role"]) == "tool")
+                    toolContent = Json.AsString(m["content"]);
+            }
+            Assert.NotNull(toolContent);
+
+            Dictionary<string, object> d = Json.Parse(toolContent) as Dictionary<string, object>;
+            Assert.Equal("true", Json.AsString(d["ok"]));
+            Assert.Equal("excel", Json.AsString(d["type"]));
+            string text = Json.AsString(d["content"]);
+            Assert.Contains("## 2026年度 売上", text);
+            Assert.Contains("A-1024\tりんご L サイズ", text);
+        }
+
+        [Fact]
+        public void AgentReadsALargeDocumentInChunks()
+        {
+            // 大きな Excel を作る。1 回の read_document では収まらない。
+            string path = Path.Combine(runner.WorkDir, "big.xlsx");
+            using (FileStream fs = new(path, FileMode.Create))
+            using (System.IO.Compression.ZipArchive zip =
+                new(fs, System.IO.Compression.ZipArchiveMode.Create))
+            {
+                AddEntry(zip, "xl/workbook.xml",
+                    "<?xml version=\"1.0\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" "
+                    + "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">"
+                    + "<sheets><sheet name=\"S\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>");
+                AddEntry(zip, "xl/_rels/workbook.xml.rels",
+                    "<?xml version=\"1.0\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+                    + "<Relationship Id=\"rId1\" Type=\"x\" Target=\"worksheets/sheet1.xml\"/></Relationships>");
+
+                string cell = new string('あ', 1000);
+                StringBuilder rows = new();
+                for (int i = 1; i <= 40; i++)
+                    rows.Append("<row r=\"" + i + "\"><c r=\"A" + i
+                        + "\" t=\"inlineStr\"><is><t>" + cell + "</t></is></c></row>");
+
+                AddEntry(zip, "xl/worksheets/sheet1.xml",
+                    "<?xml version=\"1.0\"?><worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"
+                    + "<sheetData>" + rows + "</sheetData></worksheet>");
+            }
+
+            // 1 回目は先頭から、2 回目以降は nextOffset を渡して続きを読む。
+            List<int> offsets = new();
+            llm.Reply = req =>
+            {
+                int n = MockLlm.ToolResultCount(req);
+                if (n == 0)
+                    return new[] { MockLlm.ToolCall("c0", "read_document",
+                        Json.ToString(new Dictionary<string, object> { ["path"] = path })) };
+
+                // 直前のツール結果から nextOffset を取り出す
+                Dictionary<string, object> last = null;
+                foreach (object o in (List<object>)req["messages"])
+                {
+                    Dictionary<string, object> m = o as Dictionary<string, object>;
+                    if (Json.AsString(m["role"]) == "tool")
+                        last = Json.Parse(Json.AsString(m["content"])) as Dictionary<string, object>;
+                }
+
+                bool more = last != null && Json.AsString(last["truncated"]) == "true";
+                if (more && n <= 4)
+                {
+                    int next = Json.AsInt(last["nextOffset"]);
+                    offsets.Add(next);
+                    return new[] { MockLlm.ToolCall("c" + n, "read_document",
+                        Json.ToString(new Dictionary<string, object>
+                        {
+                            ["path"] = path,
+                            ["offset"] = next,
+                        })) };
+                }
+                return new[] { new Dictionary<string, object> { ["content"] = "全部読みました。" } };
+            };
+            runner.WriteConfig(llm.Url, allowTools: true);
+
+            string output = runner.Run("この表を全部読んで\n/exit\n");
+
+            Assert.Contains("全部読みました。", output);
+            Assert.True(offsets.Count >= 1, "the agent should ask for the next chunk");
+            // 続きの読み取りも実行時と同じ表示になる
+            Assert.Contains("▶ Tool: read_document", output);
+            Assert.Contains("@" + offsets[0], output);
+        }
+
+        static void AddEntry(System.IO.Compression.ZipArchive zip, string name, string content)
+        {
+            System.IO.Compression.ZipArchiveEntry e = zip.CreateEntry(name);
+            using Stream s = e.Open();
+            byte[] b = Encoding.UTF8.GetBytes(content);
+            s.Write(b, 0, b.Length);
+        }
+
         // ---------------- セッション ----------------
 
         [Fact]

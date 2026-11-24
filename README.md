@@ -814,6 +814,7 @@ ANSI エスケープが使える環境（Windows 10 以降のコンソール、U
 |---|---|---|
 | `shell` | コマンドを実行（Windows は `cmd.exe`、Unix 系は `/bin/sh`） | `cmd` |
 | `read_file` | ファイル内容を読み取る | `path` |
+| `read_document` | PDF / Word / Excel の本文を読む | `path`, `sheet`?, `maxRows`?, `offset`?, `limit`? |
 | `write_file` | ファイルへ書き込む | `path`, `content` |
 | `list_dir` | ディレクトリ一覧を返す | `path`, `pattern`? |
 | `curl` | HTTP/HTTPS リクエスト送信（プロキシ設定を反映） | `url`, `method`?, `headers`?, `body`? |
@@ -828,6 +829,45 @@ ANSI エスケープが使える環境（Windows 10 以降のコンソール、U
 旧形式の `steps` だけが残る履歴も表示します。同じターンで既に表示した実行記録と
 一致する `steps` だけを省くため、旧形式と新形式が混在しても記録は失われません。
 本文や結果全体ではなく、コマンド・パス・URL などの詳細を表示します。
+
+### PDF / Word / Excel の読み取り（`read_document`）
+
+Office をインストールしていなくても読めます。COM は使いません。
+
+| 形式 | 読み取り方法 | 取り出せるもの |
+|---|---|---|
+| PDF (`.pdf`) | PDF の構文を自前で解析 | テキスト（FlateDecode 圧縮・UTF-16 文字列に対応） |
+| Word (`.docx`) | ZIP 内の `word/document.xml` | 本文・見出し・表（セルはタブ区切り） |
+| Excel (`.xlsx`) | ZIP 内の `xl/*.xml` | 各シートのセル（タブ区切り、共有文字列対応） |
+
+- スキャンしただけの PDF は文字を持たないため、OCR が必要と返します。
+- 旧形式の `.doc` / `.xls` / `.ppt` は非対応です。PDF か `.docx` / `.xlsx` で保存し直してください。
+- Excel は既定で各シート先頭 200 行までです。`sheet` でシートを指定できます。
+
+#### 大きな文書（コンテキストを超えるもの）
+
+長い文書でもコンテキストを溢れさせません。1 回の結果は 16000 文字までで、
+残りは `truncated=true` と `nextOffset` として返します。
+
+```
+{"ok":true,"length":400000,"offset":0,"returned":16000,"content":"...","truncated":true,"nextOffset":16000}
+```
+
+エージェントは `offset` を進めて続きを読みます。
+
+```
+  ▶ Tool: read_document  big.xlsx
+  ▶ Tool: read_document  big.xlsx  @16000
+```
+
+ツール反復が上限に達してコンパクションが走っても、読み取り位置は
+「続きを」の指示に引き継がれるため、最初から読み直しません。
+Excel は `maxRows` で行単位に、`sheet` でシート単位に読むこともできます。
+
+```
+  ▶ Tool: read_document  report.pdf
+  ▶ Tool: read_document  sales.xlsx  [売上]
+```
 
 ---
 
@@ -1071,11 +1111,15 @@ Python は不要です。
 | `tests/WebServerTests.cs` | Web サーバの起動・停止・イベント名・`ConsoleUi` 差し替え |
 | `tests/ToolDisplayTests.cs` | 実行時・履歴共通のツール詳細書式、不正な引数への耐性 |
 | `tests/ToolExecutorTests.cs` | 空白・引用符を含むシェルコマンド、標準出力・標準エラー・終了コード |
+| `tests/DocumentReaderTests.cs` | PDF / Word / Excel の抽出・圧縮・UTF-16・表・シート選択・非対応形式 |
+| `tests/DocumentSizeTests.cs` | 大きな文書の分割読み取り・続きの位置・コンテキストへの収まり |
+| `tests/TauRunnerTests.cs` | テスト用 DLL がフレームワーク依存であること |
 
 ### 実行時テスト（tau をプロセスとして起動）
 
 `tests/MockLlm.cs` がモック LLM サーバ、`tests/TauRunner.cs` が tau の起動役です。
-`TauRunner` は初回にテスト用のフレームワーク依存ビルドを作ります（`tests/tau-fx/`）。
+`tests.csproj` がテスト実行前にテスト用のフレームワーク依存ビルドを
+`tests/tau-fx/` へ用意します。
 
 | ファイル | 内容 |
 |---|---|
@@ -1091,7 +1135,7 @@ Python は不要です。
 | `tests/HistoryDisplayTests.cs` | 再起動後のツール詳細・旧形式との混在・重複防止・不完全な履歴 |
 
 ```
-Passed!  - Failed: 0, Passed: 436, Skipped: 0, Total: 436
+Passed!  - Failed: 0, Passed: 482, Skipped: 0, Total: 482
 ```
 
 所要時間は約 30 秒です。
@@ -1262,6 +1306,8 @@ tau-cli/  (= リポジトリ直下)
     LlmClient.cs            HTTP 通信（ストリーミング・再試行・TLS）
     ToolExecutor.cs         ツール定義と実行
     ToolDisplay.cs          ツール詳細と保存用 steps の共通書式
+    PdfReader.cs            PDF の解析とテキスト抽出
+    OfficeReader.cs         Word / Excel の読み取り
     SessionCtx.cs           セッションの状態
     Agent.cs                エージェント本体（ターン実行・要約）
     ConsoleUi.cs            色付き出力の補助（出力先は差し替え可能）

@@ -283,6 +283,33 @@ namespace Tau
             ctx.LastTotalTokens = 0;
         }
 
+        // 直前に読んだ文書の続きの位置を、コンパクション後の指示に添える。
+        // read_document は truncated=true と nextOffset を返すので、
+        // 要約で消える前にここで拾う。
+        static string ResumeHint(SessionCtx ctx)
+        {
+            for (int i = ctx.Messages.Count - 1; i >= 0; i--)
+            {
+                Dictionary<string, object> m = ctx.Messages[i] as Dictionary<string, object>;
+                if (m == null || Json.AsString(m["role"]) != "tool") continue;
+
+                Dictionary<string, object> r = null;
+                try { r = Json.Parse(Json.AsString(m["content"])) as Dictionary<string, object>; }
+                catch { }
+                if (r == null) continue;
+                if (!r.ContainsKey("truncated")) return "";
+                if (Json.AsString(r["truncated"]) != "true") return "";
+                if (!r.ContainsKey("nextOffset")) return "";
+
+                string path = Json.AsString(r.ContainsKey("path") ? r["path"] : "");
+                int next = Json.AsInt(r["nextOffset"]);
+                return " The document " + path + " was only partially read;"
+                    + " call read_document again with offset=" + next
+                    + " to continue reading it.";
+            }
+            return "";
+        }
+
         // ---------------- エージェント実行 ----------------
 
         // 戻り値: 最終回答。emit 系のコールバックでストリーミング表示する。
@@ -385,12 +412,18 @@ namespace Tau
                     ConsoleUi.Info("Compacting context after " + MAX_TURNS
                         + " tool iterations (round " + (compacted + 1) + "/"
                         + MAX_COMPACT_ROUNDS + ")...");
+
+                    // 要約すると、途中まで読んだ文書の「続きの位置」が失われる。
+                    // 続きを読めるよう、直前のツール結果から拾っておく。
+                    string resume = ResumeHint(ctx);
+
                     ForceCompact(cfg, ctx);
 
                     // 整理したうえで、続きを求める
                     ctx.Messages.Add(Msg("user",
                         "Continue from where you left off. Do not repeat what you"
-                        + " already did; finish the task with a final answer."));
+                        + " already did; finish the task with a final answer."
+                        + resume));
                     if (save != null) save(ctx);
                 }
 

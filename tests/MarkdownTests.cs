@@ -76,6 +76,60 @@ namespace Tau.Tests
             Assert.False(MarkdownRenderer.IsWide('1'));
         }
 
+        [Theory]
+        // 日本語と半角英数字が混在したときの表示幅
+        [InlineData("商品ID: A-1024", 14)]          // 4 全角(8) + 6 半角
+        [InlineData("価格は 1,980 JPY", 16)]        // 6 全角(6) + 10 半角
+        [InlineData("あAいBうC", 9)]                // 3 全角 + 3 半角
+        [InlineData("ABC only", 8)]
+        [InlineData("すべて全角", 10)]
+        public void MixedWidthIsCountedCorrectly(string text, int expected)
+        {
+            Assert.Equal(expected, MarkdownRenderer.VisibleLength(text));
+        }
+
+        [Fact]
+        public void MixedWidthTableAlignsColumns()
+        {
+            // 全角・半角が混在しても、表の区切りが同じ桁にそろうこと
+            string md = "| 名前 | 数量 |\n|---|---|\n| りんご L | 3 |\n| A-1024 | 12 |\n";
+            string output = Render(md);
+            string[] lines = output.Split('\n');
+
+            List<int> bars = new();
+            foreach (string line in lines)
+            {
+                if (!line.Contains('│')) continue;
+                int col = 0;
+                foreach (char c in line)
+                {
+                    if (c == '│') bars.Add(col);
+                    col += MarkdownRenderer.IsWide(c) ? 2 : 1;
+                }
+            }
+
+            Assert.True(bars.Count > 0, "the table should be rendered: " + output);
+
+            // 罫線行を除いた各行の区切り位置が、すべて同じであること
+            List<List<int>> perRow = new();
+            foreach (string line in lines)
+            {
+                if (!line.Contains('│')) continue;
+                List<int> cols = new();
+                int col = 0;
+                foreach (char c in line)
+                {
+                    if (c == '│') cols.Add(col);
+                    col += MarkdownRenderer.IsWide(c) ? 2 : 1;
+                }
+                perRow.Add(cols);
+            }
+
+            Assert.True(perRow.Count >= 3, "header and two rows should be rendered: " + output);
+            for (int i = 1; i < perRow.Count; i++)
+                Assert.Equal(perRow[0], perRow[i]);
+        }
+
         // Ambiguous(A) の文字は端末次第だが、分類としては全角側に入る
         [Theory]
         [InlineData('①')]
