@@ -968,14 +968,30 @@ tau.exe --test=offline      # ネットワークを使わない
 ```
   [TLS の接続試験]
     (TCP 接続 + TLS ハンドシェイクのみを試します。HTTP は送りません)
+    via proxy: proxy.example.com:8080 (CONNECT api.example.com:443)
 
     SystemDefault : NG  AuthenticationException: ... <- ...CERTIFICATE_VERIFY_FAILED
-    Tls12         : OK  Tls12 / Aes128
+    Tls12         : OK  Tls12 / Aes128  (via proxy)
     Tls11         : NG  AuthenticationException: ... <- ...TLSV1_ALERT_PROTOCOL_VERSION
 ```
 
 TLS の可否は **TCP 接続 + TLS ハンドシェイクだけ**で判定します（HTTP は送りません）。
 `HEAD` を使うと HEAD 非対応のサーバで `501` が返り、TLS が使えるのに NG と誤表示するためです。
+
+#### プロキシ環境での TLS 試験
+
+社内ネットワークなどで外向きの 443 が遮断されている場合、プロキシを経由しないと
+すべての TLS 試験が**タイムアウト**します。`tau` はプロキシ設定を読んで、
+プロキシへ `CONNECT` してから TLS を始めます。
+
+- 明示設定 (`proxyUrl`) があればそれを使います。
+- `useSystemProxy` が有効なら、システム既定のプロキシを使います。
+- 認証が必要なプロキシには `Proxy-Authorization: Basic` を送ります
+  （`proxyUser` / `proxyPass`）。
+- 407 が返った場合は、認証情報の設定を促すメッセージを出します。
+
+TLS 試験の表示は `via proxy: <host>:<port>` または `direct: <host>:<port>` で、
+どちらの経路を使ったかが分かります。
 
 #### 出力の見方
 
@@ -994,6 +1010,8 @@ TLS の可否は **TCP 接続 + TLS ハンドシェイクだけ**で判定しま
 | `TLSV1_ALERT_PROTOCOL_VERSION` | サーバがその TLS バージョンを受け付けない |
 | `CERTIFICATE_VERIFY_FAILED` | 証明書の検証に失敗（社内プロキシの傍受など） |
 | `SslProtocolType` エラー | .NET がその値（`SystemDefault` 等）を解釈できない |
+| すべてタイムアウト | 外向きの接続が遮断されている。プロキシ設定を確認する |
+| `proxy CONNECT failed: 407` | プロキシが認証を要求している。`proxyUser` / `proxyPass` を設定する |
 | `501 実装されていません` | HTTP メソッド（HEAD）が未対応 |
 
 > `Proxy` の表示が接続先 URL と同じ場合は、**プロキシを経由せず直接接続**しているという意味です
@@ -1113,6 +1131,7 @@ Python は不要です。
 | `tests/ToolExecutorTests.cs` | 空白・引用符を含むシェルコマンド、標準出力・標準エラー・終了コード |
 | `tests/DocumentReaderTests.cs` | PDF / Word / Excel の抽出・圧縮・UTF-16・表・シート選択・非対応形式 |
 | `tests/DocumentSizeTests.cs` | 大きな文書の分割読み取り・続きの位置・コンテキストへの収まり |
+| `tests/DiagnosticsProxyTests.cs` | プロキシ経由の TLS ハンドシェイク・CONNECT・認証・経路選択 |
 | `tests/TauRunnerTests.cs` | テスト用 DLL がフレームワーク依存であること |
 
 ### 実行時テスト（tau をプロセスとして起動）
@@ -1135,7 +1154,7 @@ Python は不要です。
 | `tests/HistoryDisplayTests.cs` | 再起動後のツール詳細・旧形式との混在・重複防止・不完全な履歴 |
 
 ```
-Passed!  - Failed: 0, Passed: 482, Skipped: 0, Total: 482
+Passed!  - Failed: 0, Passed: 491, Skipped: 0, Total: 491
 ```
 
 所要時間は約 30 秒です。

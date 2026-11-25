@@ -21,6 +21,57 @@ namespace Tau
 {
     static class ProxyHelper
     {
+        /// <summary>
+        /// 指定 URL に接続するときに使うプロキシを返す。無ければ null。
+        ///
+        /// 診断(--diag)の TLS ハンドシェイクは TCP 接続を直接行うため、
+        /// プロキシの有無を自分で判断する必要がある。
+        /// SocketsHttpHandler と同じ規則(明示設定 → システム既定)で選ぶ。
+        /// </summary>
+        public static IWebProxy ForUrl(Config cfg, Uri uri)
+        {
+            if (cfg == null || uri == null) return null;
+
+            if (cfg.ProxyUrl != null && cfg.ProxyUrl.Trim().Length > 0)
+            {
+                WebProxy p = new WebProxy(cfg.ProxyUrl.Trim());
+                if (cfg.ProxyUser != null && cfg.ProxyUser.Length > 0)
+                    p.Credentials = new NetworkCredential(cfg.ProxyUser, cfg.ProxyPass);
+                else if (cfg.ProxyPass != null && cfg.ProxyPass.Length > 0)
+                    p.Credentials = new NetworkCredential("", cfg.ProxyPass);
+                else
+                    p.UseDefaultCredentials = true;
+                return p;
+            }
+
+            if (!cfg.UseSystemProxy) return null;   // 直接接続
+
+            try
+            {
+                IWebProxy sys = WebRequest.DefaultWebProxy;
+                if (sys == null) return null;
+                Uri target = sys.GetProxy(uri);
+                // プロキシを使わない設定なら null が返る
+                if (target == null || target == uri) return null;
+                return sys;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>この URL の接続先(プロキシがあればプロキシ)を返す。</summary>
+        public static Uri ConnectTarget(Config cfg, Uri uri)
+        {
+            IWebProxy proxy = ForUrl(cfg, uri);
+            if (proxy == null) return uri;
+            try
+            {
+                Uri target = proxy.GetProxy(uri);
+                if (target == null) return uri;
+                return target;
+            }
+            catch { return uri; }
+        }
+
         // HttpClient のハンドラにプロキシ設定を反映する。
         public static void ApplyHttp(SocketsHttpHandler handler, Config cfg)
         {

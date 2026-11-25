@@ -88,6 +88,19 @@ namespace Tau
             // --- TLS の各バージョンを試す ---
             Console.WriteLine("  [TLS handshake test]");
             Console.WriteLine("    (TCP connect + TLS handshake only; no HTTP is sent)");
+
+            // プロキシ経由なら、その旨と接続先を出す。
+            // 直接接続すると社内ネットワークではタイムアウトするため。
+            Uri connectTo = ProxyHelper.ConnectTarget(cfg, uri);
+            if (connectTo != uri)
+            {
+                Console.WriteLine("    via proxy: " + connectTo.Host + ":" + connectTo.Port
+                    + " (CONNECT " + uri.Host + ":" + uri.Port + ")");
+            }
+            else
+            {
+                Console.WriteLine("    direct   : " + uri.Host + ":" + uri.Port);
+            }
             Console.WriteLine();
 
             // TLS の可否は TCP 接続 + SslStream のハンドシェイクだけで判定する。
@@ -191,23 +204,45 @@ namespace Tau
 
         // TCP 接続 → TLS ハンドシェイクだけを試す(HTTP は送らない)。
         // HTTP メソッドに依存せず、TLS そのものの可否を判定できる。
+        //
+        // プロキシが設定されている場合は、プロキシへ CONNECT してから
+        // TLS を始める。直接接続すると、社内ネットワークでは外向きの
+        // 443 が遮断されていて、すべてタイムアウトしてしまう。
+        internal static string ProbeTlsPublic(Uri uri, Config cfg, SecurityProtocolType proto)
+        {
+            return ProbeTls(uri, cfg, proto);
+        }
+
         static string ProbeTls(Uri uri, Config cfg, SecurityProtocolType proto)
         {
             System.Net.Sockets.TcpClient client = null;
             System.Net.Security.SslStream ssl = null;
             try
             {
+                Uri target = ProxyHelper.ConnectTarget(cfg, uri);
+                bool viaProxy = (target != uri);
+
                 client = new System.Net.Sockets.TcpClient();
                 System.Net.Sockets.TcpClient c = client;
-                IAsyncResult ar = c.BeginConnect(uri.Host, uri.Port, null, null);
+                IAsyncResult ar = c.BeginConnect(target.Host, target.Port, null, null);
                 if (!ar.AsyncWaitHandle.WaitOne(15000))
                 {
                     try { c.Close(); } catch { }
-                    return "NG  connection timed out (15s)";
+                    return "NG  connection timed out (15s)"
+                        + (viaProxy ? " to proxy " + target.Host + ":" + target.Port : "");
                 }
                 c.EndConnect(ar);
 
-                ssl = new System.Net.Security.SslStream(client.GetStream(), false,
+                System.IO.Stream stream = client.GetStream();
+
+                if (viaProxy)
+                {
+                    // HTTP プロキシへ CONNECT してトンネルを作る
+                    string err = ProxyConnect(stream, uri, cfg);
+                    if (err != null) return "NG  proxy CONNECT failed: " + err;
+                }
+
+                ssl = new System.Net.Security.SslStream(stream, false,
                     (sender, cert, chain, errors) =>
                     {
                         // 証明書の検証は行う(検証失敗はそのまま例外になる)
@@ -215,7 +250,7 @@ namespace Tau
                     });
 
                 ssl.AuthenticateAsClient(uri.Host, null,
-                    (System.Security.Authentication.SslProtocols)(int)proto, false);
+                    ToSslProtocols(proto), false);
 
                 string ver = "?";
                 try { ver = ssl.SslProtocol.ToString(); } catch { }
@@ -226,7 +261,7 @@ namespace Tau
                     cipher = ssl.NegotiatedCipherSuite.ToString();
                 }
                 catch { }
-                return "OK  " + ver + " / " + cipher;
+                return "OK  " + ver + " / " + cipher + (viaProxy ? "  (via proxy)" : "");
             }
             catch (Exception ex)
             {
@@ -243,6 +278,71 @@ namespace Tau
                 try { if (ssl != null) ssl.Dispose(); } catch { }
                 try { if (client != null) client.Close(); } catch { }
             }
+        }
+
+        // SecurityProtocolType を SslProtocols に変換する。
+        //
+        // SystemDefault は値が 0 で、単純にキャストすると SslProtocols.None
+        // になる。SslStream では None が「OS に任せる」を意味するので
+        // そのまま渡す。Tls11 / Tls は .NET では非推奨だが、指定された
+        // とおり試す(サーバ側の対応を確認するため)。
+        static System.Security.Authentication.SslProtocols ToSslProtocols(
+            SecurityProtocolType proto)
+        {
+            return (System.Security.Authentication.SslProtocols)(int)proto;
+        }
+
+        // プロキシへ CONNECT してトンネルを開く。失敗したら理由を返す。
+        static string ProxyConnect(System.IO.Stream stream, Uri uri, Config cfg)
+        {
+            string hostPort = uri.Host + ":" + uri.Port;
+            StringBuilder req = new StringBuilder();
+            req.Append("CONNECT ").Append(hostPort).Append(" HTTP/1.1\r\n");
+            req.Append("Host: ").Append(hostPort).Append("\r\n");
+
+            // 認証情報があれば Basic 認証を付ける
+            string user = cfg.ProxyUser ?? "";
+            string pass = cfg.ProxyPass ?? "";
+            if (user.Length > 0 || pass.Length > 0)
+            {
+                string token = Convert.ToBase64String(
+                    System.Text.Encoding.UTF8.GetBytes(user + ":" + pass));
+                req.Append("Proxy-Authorization: Basic ").Append(token).Append("\r\n");
+            }
+            req.Append("Proxy-Connection: Keep-Alive\r\n");
+            req.Append("\r\n");
+
+            byte[] bytes = System.Text.Encoding.ASCII.GetBytes(req.ToString());
+            stream.Write(bytes, 0, bytes.Length);
+            stream.Flush();
+
+            // 応答のヘッダだけを読む(空行 = CRLF CRLF まで)
+            System.Text.StringBuilder head = new();
+            DateTime limit = DateTime.UtcNow.AddSeconds(15);
+            while (DateTime.UtcNow < limit)
+            {
+                int b = stream.ReadByte();
+                if (b < 0) return "the proxy closed the connection";
+                head.Append((char)b);
+                if (head.Length >= 4
+                    && head[head.Length - 4] == '\r' && head[head.Length - 3] == '\n'
+                    && head[head.Length - 2] == '\r' && head[head.Length - 1] == '\n')
+                    break;
+            }
+
+            string text = head.ToString();
+            int sp = text.IndexOf(' ');
+            if (sp < 0) return "unexpected reply: " + FirstLine(text);
+            int code = 0;
+            int.TryParse(text.Substring(sp + 1, Math.Min(3, text.Length - sp - 1)), out code);
+
+            if (code == 200) return null;
+
+            string first = FirstLine(text);
+            if (code == 407)
+                return first + " (the proxy requires authentication;"
+                    + " set proxyUser / proxyPass)";
+            return first;
         }
 
         static string FirstLine(string s)
