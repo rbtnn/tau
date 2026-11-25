@@ -10,9 +10,13 @@
 //    0  成功
 //    1  読めなかった(--json では error を含む JSON を返す)
 //    2  使い方の誤り
+//
+//  tau.exe はこの exe を起動せず、同じパーサを直接呼ぶ(ランタイムの
+//  二重持ちを避けるため)。この exe は単体で使いたい人向け。
 // ---------------------------------------------------------------------------
 using System;
 using System.Text;
+using Tau;
 
 namespace Pdf2Text
 {
@@ -20,7 +24,7 @@ namespace Pdf2Text
     {
         static int Main(string[] args)
         {
-            // 出力は UTF-8 に固定する(tau が UTF-8 で読む)
+            // 出力は UTF-8 に固定する
             try { Console.OutputEncoding = new UTF8Encoding(false); } catch { }
 
             bool json = false;
@@ -53,74 +57,35 @@ namespace Pdf2Text
 
             if (describe)
             {
-                string info = PdfReader.Describe(path);
-                Console.WriteLine(info);
+                Console.WriteLine(PdfReader.Describe(path));
                 return 0;
             }
 
-            string text = PdfReader.ReadText(path, out string error);
+            DocumentJson.Result r = new();
+            r.Text = PdfReader.ReadText(path, out string error);
+            r.Pages = PdfReader.CountPages(path);
+            if (r.Text == null)
+            {
+                r.Error = error ?? "could not read the PDF";
+                r.Describe = PdfReader.Describe(path);
+            }
 
             if (json)
             {
-                // tau が読む JSON。キーは手書きで十分(数が少ない)。
-                StringBuilder sb = new();
-                sb.Append("{\"ok\":").Append(text != null ? "true" : "false");
-                sb.Append(",\"pages\":").Append(PdfReader.CountPages(path));
-
-                if (text != null)
-                {
-                    sb.Append(",\"length\":").Append(text.Length);
-                    sb.Append(",\"text\":").Append(JsonString(text));
-                }
-                else
-                {
-                    sb.Append(",\"error\":").Append(JsonString(error ?? "could not read the PDF"));
-                    sb.Append(",\"describe\":").Append(JsonString(PdfReader.Describe(path)));
-                }
-                sb.Append('}');
-
-                Console.Out.Write(sb.ToString());
+                Console.Out.Write(DocumentJson.ToJson("pdf", r, 0));
                 Console.Out.Write('\n');
-                return text != null ? 0 : 1;
+                return r.Text != null ? 0 : 1;
             }
 
-            if (text == null)
+            if (r.Text == null)
             {
-                Console.Error.WriteLine(error ?? "could not read the PDF");
+                Console.Error.WriteLine(r.Error);
                 return 1;
             }
 
-            Console.Out.Write(text);
+            Console.Out.Write(r.Text);
             Console.Out.Write('\n');
             return 0;
-        }
-
-        // JSON の文字列リテラル
-        static string JsonString(string s)
-        {
-            if (s == null) return "null";
-            StringBuilder sb = new();
-            sb.Append('"');
-            foreach (char c in s)
-            {
-                switch (c)
-                {
-                    case '"': sb.Append("\\\""); break;
-                    case '\\': sb.Append("\\\\"); break;
-                    case '\n': sb.Append("\\n"); break;
-                    case '\r': sb.Append("\\r"); break;
-                    case '\t': sb.Append("\\t"); break;
-                    case '\b': sb.Append("\\b"); break;
-                    case '\f': sb.Append("\\f"); break;
-                    default:
-                        if (c < 0x20)
-                            sb.Append("\\u").Append(((int)c).ToString("x4"));
-                        else sb.Append(c);
-                        break;
-                }
-            }
-            sb.Append('"');
-            return sb.ToString();
         }
     }
 }

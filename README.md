@@ -16,9 +16,11 @@
 build.bat          … tau.exe をビルド（.NET SDK 10 が必要）
 run.bat            … 起動（未ビルドなら自動でビルド）
 tau.exe            … 直接起動
+build-tools.bat    … 補助ツール(pdf2text など)を単体でビルド（通常は不要）
 ```
 
 `build.bat` は `dotnet publish` で単一ファイルの `tau.exe` を作ります。
+PDF / Word / Excel の読み取りも含めて **1 つの exe（約 16MB）**です。
 **.NET SDK 10** が必要です（`winget install Microsoft.DotNet.SDK.10`）。
 
 Linux でもビルドして動かせます（開発・テスト用）。
@@ -834,30 +836,26 @@ ANSI エスケープが使える環境（Windows 10 以降のコンソール、U
 
 Office をインストールしていなくても読めます。COM は使いません。
 
-解析は **3 つの補助 exe** が行い、`tau` はそれを子プロセスとして呼びます。
+解析は **`tau.exe` に内蔵**されています。`pdf2text` などを別の exe で
+配布する必要はありません。
 
-| exe | 役割 |
-|---|---|
-| `pdf2text.exe` | PDF からテキストを取り出す |
-| `word2text.exe` | Word (`.docx`) からテキストを取り出す |
-| `excel2text.exe` | Excel (`.xlsx`) からテキストを取り出す |
+以前は `pdf2text.exe` / `word2text.exe` / `excel2text.exe` の 3 つの
+補助 exe を子プロセスで呼んでいました。しかし exe ごとに .NET ランタイムを
+抱えるため、4 つの exe で合計 150MB を超えていました。
+いまはパーサを `tau.exe` に含めて **1 つの exe(約 16MB)** で動きます。
 
-`tau.exe` と同じフォルダに置いてください。`build.bat` がまとめてビルドします。
-見つからない場合は `pdf2text was not found. Put pdf2text.exe next to tau.exe`
-のように返ります。
-
-補助ツールは単体でも使えます。
+補助ツールを単体で使いたい場合だけ、`build-tools.bat` でビルドできます。
 
 ```
+build-tools.bat                     dist-tools に 3 つの exe を作る
+
 pdf2text   report.pdf               テキストを出力
-pdf2text   --json report.pdf        JSON で出力(tau が使う)
+pdf2text   --json report.pdf        JSON で出力
 pdf2text   --describe report.pdf    構造だけを調べる(原因の切り分け)
 
 excel2text --sheet 売上 --rows 50 sales.xlsx
 excel2text --json sales.xlsx
 ```
-
-探索順は `TAU_HELPERS_DIR` → `tau.exe` と同じフォルダ → カレントディレクトリです。
 
 | 形式 | 読み取り方法 | 取り出せるもの |
 |---|---|---|
@@ -1206,7 +1204,7 @@ Python は不要です。
 | `tests/HistoryDisplayTests.cs` | 再起動後のツール詳細・旧形式との混在・重複防止・不完全な履歴 |
 
 ```
-Passed!  - Failed: 0, Passed: 509, Skipped: 0, Total: 509
+Passed!  - Failed: 0, Passed: 511, Skipped: 0, Total: 511
 ```
 
 所要時間は約 30 秒です。
@@ -1377,9 +1375,9 @@ tau-cli/  (= リポジトリ直下)
     LlmClient.cs            HTTP 通信（ストリーミング・再試行・TLS）
     ToolExecutor.cs         ツール定義と実行
     ToolDisplay.cs          ツール詳細と保存用 steps の共通書式
-    pdf2text/               PDF の解析とテキスト抽出(別 exe)
-    word2text/              Word の読み取り(別 exe)
-    excel2text/             Excel の読み取り(別 exe)
+    pdf2text/               PDF の解析とテキスト抽出
+    word2text/              Word の読み取り
+    excel2text/             Excel の読み取り
     SessionCtx.cs           セッションの状態
     Agent.cs                エージェント本体（ターン実行・要約）
     ConsoleUi.cs            色付き出力の補助（出力先は差し替え可能）
@@ -1392,6 +1390,7 @@ tau-cli/  (= リポジトリ直下)
     MarkdownRenderer.cs     Markdown の整形表示
     SelfTest.cs             --test 自己診断テスト
   build.bat         ビルド（Windows / CP932・CRLF）
+  build-tools.bat   補助ツール単体のビルド（通常は不要）
   run.bat           起動
   tests/            dotnet test 用のテスト(xunit)
     MockLlm.cs / TauRunner.cs   実行時テストの補助

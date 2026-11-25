@@ -17,7 +17,10 @@
     <!-- カルチャ非依存で動かす(ICU の無い環境でも起動できる) -->
     <InvariantGlobalization>true</InvariantGlobalization>
 
-    <!-- 単一ファイルで配布する -->
+    <!--
+      単一ファイルの自己完結バイナリ(.NET ランタイムのインストールは不要)。
+      PDF / Word / Excel のパーサも含めて 1 つの exe にする。
+    -->
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
 
@@ -31,6 +34,16 @@
     <!-- 圧縮してサイズを抑える -->
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
 
+    <!--
+      使っていないランタイムのコードを削ってサイズを抑える(約 16MB)。
+      リフレクションや動的コードは使っていないので安全。
+      publish のときだけ有効にする(build やテストには影響させない)。
+    -->
+    <PublishTrimmed Condition="'$(Configuration)' == 'Release' and '$(RuntimeIdentifier)' != ''">true</PublishTrimmed>
+    <TrimMode>full</TrimMode>
+    <!-- JIT 用のネイティブコードを埋め込まない(小さい) -->
+    <PublishReadyToRun>false</PublishReadyToRun>
+
     <!-- バージョン情報 -->
     <Version>1.0.0</Version>
     <Authors>rbtnn</Authors>
@@ -42,9 +55,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- src/pdf2text/ などは別の exe なので除外する -->
+    <!--
+      src/pdf2text/ などの Program.cs はスタンドアロン exe 用なので除外する。
+      Reader 本体は tau から直接呼ぶため含める(ランタイムの二重持ちを避ける)。
+    -->
     <Compile Include="src/**/*.cs"
-             Exclude="src/pdf2text/**/*.cs;src/word2text/**/*.cs;src/excel2text/**/*.cs" />
+             Exclude="src/pdf2text/Program.cs;src/word2text/Program.cs;src/excel2text/Program.cs;src/**/obj/**/*.cs;src/**/bin/**/*.cs" />
     <!-- web 画面を実行ファイルに埋め込む(単一ファイル配布のため) -->
     <EmbeddedResource Include="src/www/index.html" />
   </ItemGroup>

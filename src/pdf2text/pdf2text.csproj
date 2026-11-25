@@ -15,8 +15,7 @@
 
     <InvariantGlobalization>true</InvariantGlobalization>
 
-    <!-- tau と同じ配布形態にする(単一ファイル・自己完結) -->
-    <PublishSingleFile>true</PublishSingleFile>
+    <!-- tau と同じ配布形態にする(自己完結・共有 DLL) -->
     <SelfContained>true</SelfContained>
     <RuntimeIdentifiers>win-x86;win-x64</RuntimeIdentifiers>
 
@@ -28,7 +27,12 @@
     -->
     <RuntimeIdentifiers Condition="'$(SelfContained)' == 'false'"></RuntimeIdentifiers>
 
-    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <!--
+      trimming はしない。exe ごとに DLL の内容が変わってしまい、
+      共有できなくなるため。共有すると 77MB 程度に収まる。
+    -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <PublishReadyToRun>false</PublishReadyToRun>
 
     <Version>1.0.0</Version>
     <Authors>rbtnn</Authors>
@@ -40,6 +44,8 @@
 
   <ItemGroup>
     <Compile Include="*.cs" />
+    <!-- tau と共通の処理(JSON の組み立て) -->
+    <Compile Include="../DocumentJson.cs" />
   </ItemGroup>
 
   <!-- テストから内部クラスを参照できるようにする -->

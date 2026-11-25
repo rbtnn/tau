@@ -13,6 +13,7 @@
 // ---------------------------------------------------------------------------
 using System;
 using System.Text;
+using Tau;
 
 namespace Word2Text
 {
@@ -57,65 +58,30 @@ namespace Word2Text
                 return 0;
             }
 
-            string text = WordReader.ReadText(path, out string error);
+            DocumentJson.Result r = new();
+            r.Text = WordReader.ReadText(path, out string error);
+            if (r.Text == null)
+            {
+                r.Error = error ?? "could not read the Word document";
+                r.Describe = WordReader.Describe(path);
+            }
 
             if (json)
             {
-                StringBuilder sb = new();
-                sb.Append("{\"ok\":").Append(text != null ? "true" : "false");
-
-                if (text != null)
-                {
-                    sb.Append(",\"length\":").Append(text.Length);
-                    sb.Append(",\"text\":").Append(JsonString(text));
-                }
-                else
-                {
-                    sb.Append(",\"error\":").Append(JsonString(error ?? "could not read the Word document"));
-                    sb.Append(",\"describe\":").Append(JsonString(WordReader.Describe(path)));
-                }
-                sb.Append('}');
-
-                Console.Out.Write(sb.ToString());
+                Console.Out.Write(DocumentJson.ToJson("word", r, 0));
                 Console.Out.Write('\n');
-                return text != null ? 0 : 1;
+                return r.Text != null ? 0 : 1;
             }
 
-            if (text == null)
+            if (r.Text == null)
             {
-                Console.Error.WriteLine(error ?? "could not read the Word document");
+                Console.Error.WriteLine(r.Error);
                 return 1;
             }
 
-            Console.Out.Write(text);
+            Console.Out.Write(r.Text);
             Console.Out.Write('\n');
             return 0;
-        }
-
-        static string JsonString(string s)
-        {
-            if (s == null) return "null";
-            StringBuilder sb = new();
-            sb.Append('"');
-            foreach (char c in s)
-            {
-                switch (c)
-                {
-                    case '"': sb.Append("\\\""); break;
-                    case '\\': sb.Append("\\\\"); break;
-                    case '\n': sb.Append("\\n"); break;
-                    case '\r': sb.Append("\\r"); break;
-                    case '\t': sb.Append("\\t"); break;
-                    case '\b': sb.Append("\\b"); break;
-                    case '\f': sb.Append("\\f"); break;
-                    default:
-                        if (c < 0x20) sb.Append("\\u").Append(((int)c).ToString("x4"));
-                        else sb.Append(c);
-                        break;
-                }
-            }
-            sb.Append('"');
-            return sb.ToString();
         }
     }
 }

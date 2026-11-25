@@ -118,6 +118,8 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
+      # PDF / Word / Excel のパーサは tau.exe に含まれるので、
+      # 配布するのは tau.exe 1 つだけ(約 16MB)。
       - name: Publish tau-cli
         run: >
           dotnet publish tau-cli.csproj
@@ -127,24 +129,12 @@ jobs:
           -p:PublishSingleFile=true
           -o publish/${{ matrix.rid }}
 
-      - name: Publish helper tools
-        run: |
-          for tool in pdf2text word2text excel2text; do
-            dotnet publish "src/$tool/$tool.csproj" \
-              -c Release \
-              -r ${{ matrix.rid }} \
-              --self-contained \
-              -p:PublishSingleFile=true \
-              -o "publish/${{ matrix.rid }}"
-          done
-
       - name: Package
         shell: bash
         run: |
           cd "publish/${{ matrix.rid }}"
           rm -f ./*.pdb
-          zip -q "../../tau-${{ matrix.rid }}.zip" \
-            tau.exe pdf2text.exe word2text.exe excel2text.exe
+          zip -q "../../tau-${{ matrix.rid }}.zip" tau.exe
 
       - uses: actions/upload-artifact@v4
         with:

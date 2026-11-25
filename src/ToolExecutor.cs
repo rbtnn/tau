@@ -378,9 +378,9 @@ namespace Tau
 
         // PDF / Word / Excel を、COM を使わずに読む。
         //
-        // 解析は別の exe が行う(tau のサブツール):
-        //   pdf2text.exe / word2text.exe / excel2text.exe
-        // tau.exe と同じフォルダに置く。
+        // 解析は DocumentText が行う(PDF / Word / Excel のパーサを直接呼ぶ)。
+        // 以前は pdf2text.exe などを子プロセスで起動していたが、
+        // exe ごとに .NET ランタイムを抱えて合計 150MB になっていた。
         static string ReadDocument(string path, string sheet, int maxRows,
                                    int offset, int limit)
         {
@@ -402,56 +402,28 @@ namespace Tau
                     + "PDF, .docx or .xlsx.");
             }
 
-            string tool = kind + "2text";   // pdf2text / word2text / excel2text
+            string sheetName = sheet != null ? sheet.Trim() : null;
+            int rows = maxRows > 0 ? maxRows : 200;
 
-            List<string> args = new();
-            args.Add("--json");
-            if (kind == "excel")
-            {
-                if (sheet != null && sheet.Trim().Length > 0)
-                {
-                    args.Add("--sheet");
-                    args.Add(sheet.Trim());
-                }
-                args.Add("--rows");
-                args.Add((maxRows > 0 ? maxRows : 200).ToString());
-            }
-            args.Add(path);
-
-            string output = null;
-            string error = null;
-            int code = RunHelper(tool, args, out output, out error);
-
-            if (code < 0)
-            {
-                return Err(error);
-            }
-
-            Dictionary<string, object> r = null;
-            try { r = Json.Parse(output) as Dictionary<string, object>; }
-            catch { }
-            if (r == null)
-            {
-                return Err(tool + " returned unexpected output: " + Clip(output));
-            }
+            DocumentJson.Result r = DocumentText.Read(kind, path, sheetName, rows);
 
             Dictionary<string, object> d = new();
             d["ok"] = true;
             d["path"] = Path.GetFullPath(path);
             d["type"] = kind;
-            if (r.ContainsKey("pages")) d["pages"] = Json.AsInt(r["pages"]);
-            if (kind == "excel") d["maxRows"] = maxRows > 0 ? maxRows : 200;
+            if (kind == "pdf") d["pages"] = r.Pages;
+            if (kind == "excel") d["maxRows"] = rows;
 
-            if (Json.AsString(r["ok"]) != "true")
+            if (r.Text == null)
             {
-                string message = Json.AsString(r["error"]);
-                if (message.Length == 0) message = "could not read the document";
-                if (r.ContainsKey("describe"))
-                    message += " (" + kind + ": " + Json.AsString(r["describe"]) + ")";
+                string message = r.Error;
+                if (string.IsNullOrEmpty(message)) message = "could not read the document";
+                if (!string.IsNullOrEmpty(r.Describe))
+                    message += " (" + kind + ": " + r.Describe + ")";
                 return Err(message);
             }
 
-            string text = r.ContainsKey("text") ? Json.AsString(r["text"]) : "";
+            string text = r.Text;
             int total = text.Length;
             d["length"] = total;
 
@@ -498,125 +470,6 @@ namespace Tau
                 case ".ppt": return "legacy";
                 default: return "";
             }
-        }
-
-        // 補助ツール(pdf2text など)を起動して、標準出力を返す。
-        // 見つからない場合は -1 と説明を返す。
-        static int RunHelper(string name, List<string> args, out string output, out string error)
-        {
-            output = "";
-            error = null;
-
-            string exe = FindHelper(name);
-            if (exe == null)
-            {
-                error = name + " was not found. Put " + name + ".exe next to tau.exe";
-                return -1;
-            }
-
-            try
-            {
-                bool win = Path.DirectorySeparatorChar == '\\';
-                ProcessStartInfo psi;
-
-                if (exe.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
-                {
-                    // テストや dotnet 実行時は DLL を dotnet 経由で起動する
-                    psi = new ProcessStartInfo("dotnet");
-                    psi.ArgumentList.Add(exe);
-                }
-                else
-                {
-                    psi = new ProcessStartInfo(exe);
-                }
-
-                foreach (string a in args) psi.ArgumentList.Add(a);
-
-                psi.UseShellExecute = false;
-                psi.CreateNoWindow = true;
-                psi.RedirectStandardOutput = true;
-                psi.RedirectStandardError = true;
-                psi.StandardOutputEncoding = new UTF8Encoding(false);
-                psi.StandardErrorEncoding = new UTF8Encoding(false);
-
-                using Process p = Process.Start(psi);
-                System.Threading.Tasks.Task<byte[]> so = CopyToBytesAsync(p.StandardOutput.BaseStream);
-                System.Threading.Tasks.Task<byte[]> se = CopyToBytesAsync(p.StandardError.BaseStream);
-
-                if (!p.WaitForExit(120_000))
-                {
-                    try { p.Kill(); } catch { }
-                    error = name + " timed out after 120s";
-                    return -1;
-                }
-                p.WaitForExit();
-
-                output = DecodeBytes(so.Result);
-                string stderr = DecodeBytes(se.Result);
-
-                if (p.ExitCode != 0 && output.Trim().Length == 0)
-                {
-                    error = name + " failed (exit " + p.ExitCode + "): " + stderr.Trim();
-                    return -1;
-                }
-                return p.ExitCode;
-            }
-            catch (Exception ex)
-            {
-                error = "could not run " + name + ": " + ex.Message;
-                return -1;
-            }
-        }
-
-        // 補助ツールの場所を探す。
-        //  1. tau.exe と同じフォルダ
-        //  2. 環境変数 TAU_HELPERS_DIR
-        //  3. カレントディレクトリ
-        static string FindHelper(string name)
-        {
-            bool win = Path.DirectorySeparatorChar == '\\';
-            string fileName = win ? name + ".exe" : name;
-            string dllName = name + ".dll";
-
-            List<string> dirs = new();
-
-            string helpersDir = Environment.GetEnvironmentVariable("TAU_HELPERS_DIR");
-            if (!string.IsNullOrEmpty(helpersDir)) dirs.Add(helpersDir);
-
-            try
-            {
-                string baseDir = AppContext.BaseDirectory;
-                if (!string.IsNullOrEmpty(baseDir)) dirs.Add(baseDir);
-            }
-            catch { }
-
-            try { dirs.Add(Directory.GetCurrentDirectory()); } catch { }
-
-            foreach (string dir in dirs)
-            {
-                if (string.IsNullOrEmpty(dir)) continue;
-
-                string exe = Path.Combine(dir, fileName);
-                if (File.Exists(exe)) return exe;
-
-                string dll = Path.Combine(dir, dllName);
-                if (File.Exists(dll) && IsFrameworkDependent(dll)) return dll;
-            }
-            return null;
-        }
-
-        // その DLL が `dotnet xxx.dll` で起動できるか。
-        // 自己完結ビルドの runtimeconfig.json は framework を持たない。
-        static bool IsFrameworkDependent(string dll)
-        {
-            string cfg = Path.ChangeExtension(dll, ".runtimeconfig.json");
-            try
-            {
-                if (!File.Exists(cfg)) return false;
-                string json = File.ReadAllText(cfg);
-                return json.Contains("\"framework\"");
-            }
-            catch { return false; }
         }
 
         static string ListDir(string path, string pattern)

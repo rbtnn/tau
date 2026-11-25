@@ -49,6 +49,50 @@ namespace Tau.Tests
             return Json.Parse(json) as Dictionary<string, object>;
         }
 
+        // ---------------- 補助ツール無しで動く ----------------
+
+        [Fact]
+        public void ReadDocumentWorksWithoutHelperExecutables()
+        {
+            // tau は PDF / Word / Excel のパーサを直接呼ぶので、
+            // pdf2text.exe などが無くても読める。
+            string path = MakePdf("no helpers needed");
+
+            string saved = Environment.GetEnvironmentVariable("TAU_HELPERS_DIR");
+            try
+            {
+                Environment.SetEnvironmentVariable("TAU_HELPERS_DIR",
+                    Path.Combine(dir, "does-not-exist"));
+
+                Dictionary<string, object> d =
+                    Result(ToolExecutor.Execute("read_document",
+                        Json.ToString(new Dictionary<string, object> { ["path"] = path }),
+                        new Config("")));
+
+                Assert.True(d.ContainsKey("content"), Json.ToString(d));
+                Assert.Contains("no helpers needed", Json.AsString(d["content"]));
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("TAU_HELPERS_DIR", saved);
+            }
+        }
+
+        [Fact]
+        public void ReadDocumentReadsWordAndExcelInProcess()
+        {
+            // Word / Excel も同じ経路で読む。
+            Dictionary<string, object> w = Result(ToolExecutor.Execute("read_document",
+                Json.ToString(new Dictionary<string, object> { ["path"] = MakeDocx() }),
+                new Config("")));
+            Assert.Contains("テスト", Json.AsString(w["content"]));
+
+            Dictionary<string, object> x = Result(ToolExecutor.Execute("read_document",
+                Json.ToString(new Dictionary<string, object> { ["path"] = MakeXlsx() }),
+                new Config("")));
+            Assert.Contains("りんご", Json.AsString(x["content"]));
+        }
+
         // ---------------- サンプルの生成 ----------------
 
         // 最小構成の PDF を作る。テキストは WinAnsi の ASCII と UTF-16BE の両方。
