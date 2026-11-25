@@ -870,9 +870,11 @@ PDF は次の形式に対応しています。
 | 項目 | 対応 |
 |---|---|
 | 圧縮 | FlateDecode / ASCII85 / ASCIIHex / RunLength / LZW（連鎖も可） |
+| 圧縮（PNG） | `/Predictor` 10〜15（xref ストリームで使われる） |
 | 文書構造 | オブジェクトストリーム（`/ObjStm`）・xref ストリーム（`/XRef`） |
 | フォント | CID フォント（`Identity-H`/`Identity-V`）+ `ToUnicode` CMap |
 | フォント（代替） | `/Encoding /Differences` のグリフ名、埋め込み TrueType の `cmap` |
+| フォント（CID） | Adobe-Japan1 の CID → Unicode 標準表（`Ordering (Japan1)`） |
 | タグ付き PDF | `/ActualText` があればその文字を使う |
 | フォーム | `AcroForm` のフィールド値（入力欄だけの PDF） |
 | 暗号化 | 検出して「暗号化されている」と返す（復号はしない） |
@@ -887,6 +889,11 @@ PDF は次の形式に対応しています。
 
 - 旧形式の `.doc` / `.xls` / `.ppt` は非対応です。PDF か `.docx` / `.xlsx` で保存し直してください。
 - Excel は既定で各シート先頭 200 行までです。`sheet` でシートを指定できます。
+
+#### 大きな PDF
+
+35MB・368 ページ・4292 オブジェクトの書籍 PDF を 0.5 秒で読みます。
+以前はオブジェクトごとに全文を文字列化していたため、応答が返りませんでした。
 
 #### 大きな文書（コンテキストを超えるもの）
 
@@ -1199,7 +1206,7 @@ Python は不要です。
 | `tests/HistoryDisplayTests.cs` | 再起動後のツール詳細・旧形式との混在・重複防止・不完全な履歴 |
 
 ```
-Passed!  - Failed: 0, Passed: 506, Skipped: 0, Total: 506
+Passed!  - Failed: 0, Passed: 509, Skipped: 0, Total: 509
 ```
 
 所要時間は約 30 秒です。

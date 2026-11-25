@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Text;
@@ -244,6 +245,60 @@ namespace Tau.Tests
             Assert.Contains("A-00001", Json.AsString(small["content"]));
             Assert.Contains("A-00005", Json.AsString(small["content"]));
             Assert.DoesNotContain("A-00006", Json.AsString(small["content"]));
+        }
+
+        [Fact]
+        public void LargePdfWithManyObjectsIsReadQuickly()
+        {
+            // 実際の書籍 PDF は数万オブジェクトを持つことがある。
+            // 以前は 1 オブジェクトごとに全文を文字列化していて、
+            // 35MB の PDF で応答が返らなくなっていた。
+            string path = MakeLargePdfWithManyObjects(400);
+
+            Stopwatch sw = Stopwatch.StartNew();
+            Dictionary<string, object> d = Run(path, "{\"limit\":100000}");
+            sw.Stop();
+
+            Assert.True(d.ContainsKey("ok"), Json.ToString(d));
+            Assert.Contains("many objects", Json.AsString(d["content"]));
+            Assert.True(sw.ElapsedMilliseconds < 15000,
+                "reading should finish quickly, took " + sw.ElapsedMilliseconds + "ms");
+        }
+
+        // オブジェクト数を増やした PDF を作る。
+        string MakeLargePdfWithManyObjects(int extraObjects)
+        {
+            List<byte[]> objs = new();
+            objs.Add(Enc("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"));
+            objs.Add(Enc("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n"));
+
+            byte[] stream = Enc("BT /F1 12 Tf 72 720 Td (many objects) Tj ET");
+            byte[] head = Enc("3 0 obj\n<< /Type /Page /Parent 2 0 R /Contents 3 0 R /Length "
+                + stream.Length + " >>\nstream\n");
+            byte[] tail = Enc("\nendstream\nendobj\n");
+            byte[] page = new byte[head.Length + stream.Length + tail.Length];
+            Buffer.BlockCopy(head, 0, page, 0, head.Length);
+            Buffer.BlockCopy(stream, 0, page, head.Length, stream.Length);
+            Buffer.BlockCopy(tail, 0, page, head.Length + stream.Length, tail.Length);
+            objs.Add(page);
+
+            // 使わないオブジェクトを大量に足す
+            for (int i = 0; i < extraObjects; i++)
+                objs.Add(Enc((4 + i) + " 0 obj\n<< /Type /XObject /Length 0 >>\nendobj\n"));
+
+            MemoryStream ms = new();
+            Write(ms, "%PDF-1.7\n");
+            List<int> offsets = new();
+            foreach (byte[] o in objs) { offsets.Add((int)ms.Length); ms.Write(o, 0, o.Length); }
+            int xref = (int)ms.Length;
+            Write(ms, "xref\n0 " + (objs.Count + 1) + "\n0000000000 65535 f \n");
+            foreach (int off in offsets) Write(ms, off.ToString("D10") + " 00000 n \n");
+            Write(ms, "trailer\n<< /Size " + (objs.Count + 1) + " /Root 1 0 R >>\nstartxref\n"
+                + xref + "\n%%EOF\n");
+
+            string path = Path.Combine(dir, "many.pdf");
+            File.WriteAllBytes(path, ms.ToArray());
+            return path;
         }
 
         // 文字数からトークン数を概算する(日本語 1 文字 ≒ 1〜2、英数 4 文字 ≒ 1)

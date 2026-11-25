@@ -586,7 +586,7 @@ namespace Tau.Tests
                 Enc("<< /Type /Font /Subtype /Type0 /BaseFont /MSGothic "
                     + "/Encoding /Identity-H /DescendantFonts [6 0 R] >>"),
                 Enc("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /MSGothic "
-                    + "/CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 2 >> >>"),
+                    + "/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> >>"),
             }, 1, 7);
 
             string text = Read(path, out string error);
@@ -620,6 +620,61 @@ namespace Tau.Tests
             // 24 番は breve (U+02D8)
             Assert.Contains("\u02D8", text);
             Assert.Contains("A", text);
+        }
+
+        // ---------------- Adobe-Japan1 の CID 対応 ----------------
+
+        [Fact]
+        public void IdentityHWithoutToUnicodeUsesJapan1Table()
+        {
+            // CIDSystemInfo が Japan1 なら、標準表で復元できる。
+            // 634 = 、 / 866 = す / 880 = で
+            byte[] content = Enc("BT /F1 12 Tf 72 720 Td <027A03620370> Tj ET");
+            string contentZ = Zlib(content);
+
+            string path = WriteSimplePdf(new List<byte[]>
+            {
+                Enc("<< /Type /Catalog /Pages 2 0 R >>"),
+                Enc("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+                Enc("<< /Type /Page /Parent 2 0 R /Contents 4 0 R "
+                    + "/Resources << /Font << /F1 5 0 R >> >> >>"),
+                Enc("<< /Length " + contentZ.Length + " /Filter /FlateDecode >>\nstream\n"
+                    + contentZ + "\nendstream"),
+                Enc("<< /Type /Font /Subtype /Type0 /BaseFont /Ryumin "
+                    + "/Encoding /Identity-H /DescendantFonts [6 0 R] >>"),
+                Enc("<< /Type /Font /Subtype /CIDFontType0 /BaseFont /Ryumin "
+                    + "/CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 6 >> >>"),
+            }, 1, 7);
+
+            string text = Read(path, out string error);
+            Assert.True(error == null, error);
+            Assert.Equal("、すで", text);
+        }
+
+        [Fact]
+        public void NonJapan1CidFontIsStillReported()
+        {
+            // Ordering が Japan1 でなければ、標準表は使わない。
+            byte[] content = Enc("BT /F1 12 Tf 72 720 Td <0001> Tj ET");
+            string contentZ = Zlib(content);
+
+            string path = WriteSimplePdf(new List<byte[]>
+            {
+                Enc("<< /Type /Catalog /Pages 2 0 R >>"),
+                Enc("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+                Enc("<< /Type /Page /Parent 2 0 R /Contents 4 0 R "
+                    + "/Resources << /Font << /F1 5 0 R >> >> >>"),
+                Enc("<< /Length " + contentZ.Length + " /Filter /FlateDecode >>\nstream\n"
+                    + contentZ + "\nendstream"),
+                Enc("<< /Type /Font /Subtype /Type0 /BaseFont /Foo "
+                    + "/Encoding /Identity-H /DescendantFonts [6 0 R] >>"),
+                Enc("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Foo "
+                    + "/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> >>"),
+            }, 1, 7);
+
+            string text = Read(path, out string error);
+            Assert.Null(text);
+            Assert.Contains("could not be decoded", error);
         }
 
         // ---------------- CID フォント + ToUnicode ----------------

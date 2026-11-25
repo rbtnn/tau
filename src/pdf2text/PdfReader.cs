@@ -277,6 +277,10 @@ namespace Pdf2Text
     {
         readonly byte[] data;
 
+        // data を Latin-1 として見た文字列。GetObject が何度も呼ばれるので
+        // 1 度だけ作る(35MB の PDF では、毎回作ると非常に遅い)。
+        string textCache;
+
         // オブジェクト番号 → オブジェクトの開始位置
         readonly Dictionary<int, int> offsets = new();
 
@@ -323,7 +327,7 @@ namespace Pdf2Text
 
         bool ScanObjects()
         {
-            string text = Latin1(data);
+            string text = Text;
 
             // "N G obj" を探す。単純な走査で十分(壊れた PDF では諦める)。
             int pos = 0;
@@ -522,6 +526,17 @@ namespace Pdf2Text
             return Encoding.Latin1.GetString(b);
         }
 
+        // data を Latin-1 として見た文字列。GetObject が何度も呼ばれるので
+        // 1 度だけ作る(35MB の PDF では、毎回作ると非常に遅い)。
+        string Text
+        {
+            get
+            {
+                if (textCache == null) textCache = Encoding.Latin1.GetString(data);
+                return textCache;
+            }
+        }
+
         void ReadTrailer()
         {
             string text = Latin1(data);
@@ -575,7 +590,7 @@ namespace Pdf2Text
         {
             if (offsets.TryGetValue(num, out int pos))
             {
-                string text = Latin1(data);
+                string text = Text;
 
                 // "<num> <gen> obj" の後ろから辞書を読む
                 int obj = text.IndexOf("obj", pos, StringComparison.Ordinal);
@@ -699,7 +714,7 @@ namespace Pdf2Text
 
         Dictionary<string, PdfObject> ParseDictAt(int start)
         {
-            string text = Latin1(data);
+            string text = Text;
             int end = SkipDict(text, start);
             string body = text.Substring(start + 2, Math.Max(0, end - start - 4));
             return ParseDictBody(body);
@@ -1174,7 +1189,21 @@ namespace Pdf2Text
             // ToUnicode が無い場合、埋め込み TrueType (FontFile2) の cmap から
             // グリフ番号 → Unicode を逆引きする。これで Identity-H/V の
             // CID フォントでも文字が取れることがある。
-            if (!fm.HasMap && fm.TwoByte) fm.Undecodable = true;
+            // CID フォントで ToUnicode が無い場合、Adobe-Japan1 の
+            // 標準 CID 対応表から文字を復元する。
+            if (!fm.HasMap && fm.TwoByte && fontObj.Dict.ContainsKey("DescendantFonts"))
+            {
+                PdfObject df = Resolve(fontObj.Dict["DescendantFonts"]);
+                if (df != null && df.IsArray && df.ArrayBody != null)
+                {
+                    int num = FirstRefIn(df.ArrayBody);
+                    PdfObject cidFont = num >= 0 ? GetObject(num) : null;
+                    if (cidFont != null && cidFont.Dict != null && IsJapan1(cidFont))
+                        fm.UseJapan1 = true;
+                }
+            }
+
+            if (!fm.HasMap && fm.TwoByte && !fm.UseJapan1) fm.Undecodable = true;
 
             if (!fm.HasMap && fontObj.Dict.ContainsKey("DescendantFonts"))
             {
@@ -1189,6 +1218,20 @@ namespace Pdf2Text
             }
 
             return fm;
+        }
+
+        // /CIDSystemInfo の Ordering が Japan1 か。
+        bool IsJapan1(PdfObject cidFont)
+        {
+            if (!cidFont.Dict.ContainsKey("CIDSystemInfo")) return false;
+            PdfObject info = Resolve(cidFont.Dict["CIDSystemInfo"]);
+            if (info == null || info.Dict == null) return false;
+            if (!info.Dict.ContainsKey("Ordering")) return false;
+
+            PdfObject o = info.Dict["Ordering"];
+            if (o == null) return false;
+            string name = o.IsString ? o.StringValue : o.NameValue;
+            return name != null && name.Contains("Japan1");
         }
 
         static int FirstRefIn(string body)
@@ -1739,7 +1782,7 @@ namespace Pdf2Text
         {
             if (o == null || o.Dict == null || o.StreamStart <= 0) return null;
 
-            string text = Latin1(data);
+            string text = Text;
 
             int start = o.StreamStart;
             int len = o.Length;
@@ -1764,8 +1807,133 @@ namespace Pdf2Text
             {
                 current = ApplyFilter(f, current);
                 if (current == null) return null;
+
+                // FlateDecode のあとに PNG 予測子が指定されることがある
+                // (/DecodeParms の /Predictor)。xref ストリームで多い。
+                if (f == "FlateDecode" || f == "Fl")
+                {
+                    int predictor = PredictorOf(o);
+                    if (predictor >= 10)
+                    {
+                        int colors = DecodeParamInt(o, "Colors", 1);
+                        int bits = DecodeParamInt(o, "BitsPerComponent", 8);
+                        int columns = DecodeParamInt(o, "Columns", 1);
+                        current = Unpredict(current, predictor, colors, bits, columns);
+                        if (current == null) return null;
+                    }
+                }
             }
             return Latin1(current);
+        }
+
+        // /DecodeParms (または /DP) の数値。無ければ既定値。
+        int DecodeParamInt(PdfObject o, string key, int def)
+        {
+            if (o.Dict == null) return def;
+
+            PdfObject parms = null;
+            if (o.Dict.ContainsKey("DecodeParms")) parms = Resolve(o.Dict["DecodeParms"]);
+            else if (o.Dict.ContainsKey("DP")) parms = Resolve(o.Dict["DP"]);
+            if (parms == null) return def;
+
+            // 配列ならフィルタと同じ順の最初の要素
+            if (parms.IsArray && parms.ArrayBody != null)
+            {
+                int num = FirstRefIn(parms.ArrayBody);
+                if (num >= 0) parms = GetObject(num);
+                else
+                {
+                    Dictionary<string, PdfObject> d = ParseDictBody(
+                        parms.ArrayBody.Trim().TrimStart('<').TrimStart('<'));
+                    if (d != null && d.ContainsKey(key)) return AsInt(d[key]);
+                    return def;
+                }
+            }
+            if (parms.Dict != null && parms.Dict.ContainsKey(key))
+                return AsInt(parms.Dict[key]);
+            return def;
+        }
+
+        int PredictorOf(PdfObject o)
+        {
+            return DecodeParamInt(o, "Predictor", 1);
+        }
+
+        // PNG 予測子(Predictor 10..15)を解除する。
+        static byte[] Unpredict(byte[] input, int predictor, int colors, int bits, int columns)
+        {
+            if (input == null || input.Length == 0) return input;
+
+            int bpp = Math.Max(1, (colors * bits + 7) / 8);
+            int rowLen = (colors * bits * columns + 7) / 8;
+
+            // 予測子 10..14 は固定、15 は行ごとに種類が入る
+            List<byte> outBytes = new();
+            byte[] prior = new byte[rowLen];
+            int pos = 0;
+
+            while (pos < input.Length)
+            {
+                int type;
+                if (predictor == 15)
+                {
+                    if (pos >= input.Length) break;
+                    type = input[pos++];
+                }
+                else type = predictor - 10;
+
+                if (pos + rowLen > input.Length) break;
+
+                byte[] row = new byte[rowLen];
+                Array.Copy(input, pos, row, 0, rowLen);
+                pos += rowLen;
+
+                switch (type)
+                {
+                    case 0: break;   // None
+                    case 1:          // Sub
+                        for (int i = bpp; i < rowLen; i++)
+                            row[i] = (byte)(row[i] + row[i - bpp]);
+                        break;
+                    case 2:          // Up
+                        for (int i = 0; i < rowLen; i++)
+                            row[i] = (byte)(row[i] + prior[i]);
+                        break;
+                    case 3:          // Average
+                        for (int i = 0; i < rowLen; i++)
+                        {
+                            int left = (i >= bpp) ? row[i - bpp] : 0;
+                            row[i] = (byte)(row[i] + ((left + prior[i]) / 2));
+                        }
+                        break;
+                    case 4:          // Paeth
+                        for (int i = 0; i < rowLen; i++)
+                        {
+                            int left = (i >= bpp) ? row[i - bpp] : 0;
+                            int up = prior[i];
+                            int upLeft = (i >= bpp) ? prior[i - bpp] : 0;
+                            row[i] = (byte)(row[i] + Paeth(left, up, upLeft));
+                        }
+                        break;
+                    default:
+                        return null;
+                }
+
+                outBytes.AddRange(row);
+                prior = row;
+            }
+            return outBytes.ToArray();
+        }
+
+        static int Paeth(int a, int b, int c)
+        {
+            int p = a + b - c;
+            int pa = Math.Abs(p - a);
+            int pb = Math.Abs(p - b);
+            int pc = Math.Abs(p - c);
+            if (pa <= pb && pa <= pc) return a;
+            if (pb <= pc) return b;
+            return c;
         }
 
         static byte[] ApplyFilter(string name, byte[] input)
@@ -2042,6 +2210,9 @@ namespace Pdf2Text
 
         // 文字の対応表がまったく無い(グリフ番号しか分からない)
         public bool Undecodable;
+
+        // Adobe-Japan1 の標準 CID 対応表で復元する
+        public bool UseJapan1;
     }
 
     sealed class PdfObject
@@ -2499,7 +2670,7 @@ namespace Pdf2Text
             byte[] bytes = HexToBytes(hex.ToString());
 
             // ToUnicode があれば、それで文字に変換する
-            if (font != null && font.HasMap)
+            if (font != null && (font.HasMap || font.UseJapan1))
                 return DecodeWithMap(bytes, font);
 
             // UTF-16BE (BOM 付き) か、1 バイト文字かを判定する
@@ -2520,7 +2691,7 @@ namespace Pdf2Text
         // ToUnicode が無い場合は、そのまま返す(従来の動作)。
         static string DecodeString(string raw, FontMap font)
         {
-            if (font == null || !font.HasMap || raw.Length == 0) return raw;
+            if (font == null || (!font.HasMap && !font.UseJapan1) || raw.Length == 0) return raw;
             byte[] bytes = Encoding.Latin1.GetBytes(raw);
             return DecodeWithMap(bytes, font);
         }
@@ -2534,7 +2705,16 @@ namespace Pdf2Text
                 for (int k = 0; k + 1 < bytes.Length; k += 2)
                 {
                     int code = (bytes[k] << 8) | bytes[k + 1];
-                    if (font.Map.TryGetValue(code, out string ch)) sb.Append(ch);
+                    if (font.Map.TryGetValue(code, out string ch))
+                    {
+                        sb.Append(ch);
+                    }
+                    else if (font.UseJapan1)
+                    {
+                        // Adobe-Japan1 の標準 CID 対応表
+                        string c = AdobeJapan1.ToText(code);
+                        if (c != null) sb.Append(c);
+                    }
                 }
             }
             else
