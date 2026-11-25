@@ -54,6 +54,10 @@ tau.exe [オプション]
   --web                ブラウザ用の最小 Web UI を起動（緊急用）
   --port <n>           --web のポート (既定 8080、使用中なら空きを選ぶ)
   --debug              デバッグ出力を有効にする（TAU_DEBUG=1 と同じ）
+  --pdf2text <file>    PDF のテキストを出力（pdf2text.exe と同じ動作）
+  --word2text <file>   Word のテキストを出力
+  --excel2text <file>  Excel のテキストを出力
+                       --json / --describe / --sheet / --rows も使える
   --help, -h, /?       ヘルプを表示
 ```
 
@@ -844,17 +848,27 @@ Office をインストールしていなくても読めます。COM は使いま
 抱えるため、4 つの exe で合計 150MB を超えていました。
 いまはパーサを `tau.exe` に含めて **1 つの exe(約 16MB)** で動きます。
 
-補助ツールを単体で使いたい場合だけ、`build-tools.bat` でビルドできます。
+`tau.exe` には補助ツールと同じ動作をするサブコマンドがあります。
+
+```
+tau --pdf2text   report.pdf               テキストを出力
+tau --pdf2text   --json report.pdf        JSON で出力
+tau --pdf2text   --describe report.pdf    構造だけを調べる(原因の切り分け)
+
+tau --word2text  memo.docx
+tau --excel2text --sheet 売上 --rows 50 sales.xlsx
+tau --excel2text --json sales.xlsx
+```
+
+引数と出力は `pdf2text.exe` などとまったく同じです。終了コードも同じで、
+成功が 0、読めなかったのが 1、使い方の誤りが 2 です。
+
+補助ツールを単体の exe として使いたい場合だけ、`build-tools.bat` で
+ビルドできます。
 
 ```
 build-tools.bat                     dist-tools に 3 つの exe を作る
-
-pdf2text   report.pdf               テキストを出力
-pdf2text   --json report.pdf        JSON で出力
-pdf2text   --describe report.pdf    構造だけを調べる(原因の切り分け)
-
-excel2text --sheet 売上 --rows 50 sales.xlsx
-excel2text --json sales.xlsx
+pdf2text report.pdf                 同じ動作(tau --pdf2text と同じ)
 ```
 
 | 形式 | 読み取り方法 | 取り出せるもの |
@@ -1204,7 +1218,7 @@ Python は不要です。
 | `tests/HistoryDisplayTests.cs` | 再起動後のツール詳細・旧形式との混在・重複防止・不完全な履歴 |
 
 ```
-Passed!  - Failed: 0, Passed: 511, Skipped: 0, Total: 511
+Passed!  - Failed: 0, Passed: 516, Skipped: 0, Total: 516
 ```
 
 所要時間は約 30 秒です。

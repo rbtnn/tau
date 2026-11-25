@@ -52,6 +52,12 @@ namespace Tau
             string configSetValue = null;
             string executeText = null;    // -e / --execute のプロンプト
 
+            // --pdf2text / --word2text / --excel2text
+            // 補助ツールと同じ動作をするサブコマンド。指定すると tau の
+            // 対話は始めず、そのまま終了する。
+            string toolKind = null;       // "pdf" / "word" / "excel"
+            List<string> toolArgs = new();
+
             for (int i = 0; i < args.Length; i++)
             {
                 string a = (args[i] ?? "").Trim();
@@ -99,6 +105,9 @@ namespace Tau
                 else if (a == "--test") selfTest = true;
                 else if (a == "--test=offline") { selfTest = true; selfTestOffline = true; }
                 else if (a == "--test-offline") { selfTest = true; selfTestOffline = true; }
+                else if (a == "--pdf2text") toolKind = "pdf";
+                else if (a == "--word2text") toolKind = "word";
+                else if (a == "--excel2text") toolKind = "excel";
                 else if (a == "--web") web = true;
                 else if (a.StartsWith("--web=")) { web = true; ParsePort(a.Substring("--web=".Length), ref webPort); }
                 else if (a == "--port" && i + 1 < args.Length) { ParsePort(args[++i], ref webPort); }
@@ -108,6 +117,26 @@ namespace Tau
                 else if (a == "--diag") { selfTest = true; selfTestOffline = false; }
                 else if (a == "--session" && i + 1 < args.Length) sessionArg = args[++i].Trim();
                 else if (a.StartsWith("--session=")) sessionArg = a.Substring("--session=".Length);
+            }
+
+            // --pdf2text などの後ろは、そのまま補助ツールへ渡す。
+            // ループでは未知の引数を無視していたため、ここで集め直す。
+            if (toolKind != null)
+            {
+                bool afterTool = false;
+                foreach (string raw in args)
+                {
+                    string a = (raw ?? "").Trim();
+                    if (!afterTool)
+                    {
+                        if (a == "--pdf2text" || a == "--word2text" || a == "--excel2text")
+                            afterTool = true;
+                        continue;
+                    }
+                    toolArgs.Add(raw);
+                }
+                Environment.ExitCode = RunTool(toolKind, toolArgs);
+                return;
             }
 
             if (version) { PrintVersion(); return; }
@@ -662,6 +691,10 @@ namespace Tau
             Console.WriteLine("  --web                Serve a minimal web UI in the browser (emergency use)");
             Console.WriteLine("  --port <n>           Port for --web (default 8080, picks a free one if taken)");
             Console.WriteLine("  --debug              Enable debug output (same as TAU_DEBUG=1)");
+            Console.WriteLine("  --pdf2text <file.pdf>   Print the text of a PDF (like pdf2text.exe)");
+            Console.WriteLine("  --word2text <file.docx> Print the text of a Word file");
+            Console.WriteLine("  --excel2text <file.xlsx> Print the text of an Excel workbook");
+            Console.WriteLine("                       Add --json, --describe, --sheet <name> or --rows <n>");
             Console.WriteLine("  --help, -h, /?       Show this help");
             Console.WriteLine();
             Console.WriteLine("Commands available while chatting:");
@@ -675,6 +708,121 @@ namespace Tau
             Console.WriteLine("  /e[xit], /q[uit]   Exit (Ctrl+D also works)");
             Console.WriteLine();
             Console.WriteLine("  [ ] marks the optional part, as in Vim help (/n is /new).");
+        }
+
+        // ===================================================================
+        //  補助ツール相当のサブコマンド
+        //
+        //  --pdf2text / --word2text / --excel2text は、単体で配布していた
+        //  pdf2text.exe などと同じ引数・出力を受け付ける。
+        //  tau.exe 1 つで完結させたい人のために用意している。
+        //
+        //  使い方:
+        //    tau.exe --pdf2text <file.pdf>
+        //    tau.exe --pdf2text --json <file.pdf>
+        //    tau.exe --pdf2text --describe <file.pdf>
+        //    tau.exe --excel2text --sheet 売上 --rows 50 <file.xlsx>
+        //
+        //  終了コード:
+        //    0  成功
+        //    1  読めなかった(--json では error を含む JSON を返す)
+        //    2  使い方の誤り
+        // ===================================================================
+        internal static int RunTool(string kind, List<string> args)
+        {
+            // 出力は UTF-8 に固定する(パイプで受けたとき文字化けしない)
+            try { Console.OutputEncoding = new UTF8Encoding(false); } catch { }
+
+            bool json = false;
+            bool describe = false;
+            string sheet = null;
+            int maxRows = 0;
+            string path = null;
+
+            string usage = "usage: tau.exe --" + kind + "2text"
+                + (kind == "excel" ? " [--json] [--sheet <name>] [--rows <n>]" : " [--json|--describe]")
+                + " <file." + (kind == "pdf" ? "pdf" : kind == "word" ? "docx" : "xlsx") + ">";
+
+            for (int i = 0; i < args.Count; i++)
+            {
+                string a = (args[i] ?? "").Trim();
+
+                if (a == "--json") json = true;
+                else if (a == "--describe") describe = true;
+                else if (a == "--help" || a == "-h")
+                {
+                    Console.WriteLine(usage);
+                    return 0;
+                }
+                else if (a == "--sheet" && i + 1 < args.Count) sheet = (args[++i] ?? "").Trim();
+                else if (a.StartsWith("--sheet=")) sheet = a.Substring("--sheet=".Length);
+                else if (a == "--rows" && i + 1 < args.Count)
+                {
+                    if (!int.TryParse((args[++i] ?? "").Trim(), out maxRows) || maxRows < 0)
+                    {
+                        Console.Error.WriteLine("invalid --rows value");
+                        return 2;
+                    }
+                }
+                else if (a.StartsWith("--rows="))
+                {
+                    if (!int.TryParse(a.Substring("--rows=".Length), out maxRows) || maxRows < 0)
+                    {
+                        Console.Error.WriteLine("invalid --rows value");
+                        return 2;
+                    }
+                }
+                else if (path == null) path = args[i];
+                else
+                {
+                    Console.Error.WriteLine("too many arguments: " + a);
+                    return 2;
+                }
+            }
+
+            if (path == null)
+            {
+                Console.Error.WriteLine(usage);
+                return 2;
+            }
+
+            // ファイルが無い場合は、パーサの奥深い例外ではなく
+            // 分かりやすいメッセージを返す(補助ツールと同じ)。
+            if (!File.Exists(path))
+            {
+                Console.Error.WriteLine("file does not exist: " + path);
+                return 1;
+            }
+
+            if (describe)
+            {
+                string info;
+                if (kind == "pdf") info = Pdf2Text.PdfReader.Describe(path);
+                else if (kind == "word") info = Word2Text.WordReader.Describe(path);
+                else info = Excel2Text.ExcelReader.Describe(path);
+
+                Console.WriteLine(info);
+                return 0;
+            }
+
+            DocumentJson.Result r = DocumentText.Read(kind, path, sheet, maxRows);
+
+            if (json)
+            {
+                Console.Out.Write(DocumentJson.ToJson(kind, r, maxRows));
+                Console.Out.Write('\n');
+                return r.Text != null ? 0 : 1;
+            }
+
+            if (r.Text == null)
+            {
+                Console.Error.WriteLine(r.Error);
+                return 1;
+            }
+
+            Console.Out.Write(r.Text);
+            Console.Out.Write('\n');
+            return 0;
         }
 
         static void ListSessions(string configPath)

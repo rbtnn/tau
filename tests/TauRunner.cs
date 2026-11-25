@@ -213,6 +213,46 @@ namespace Tau.Tests
         }
 
         /// <summary>
+        /// tau を起動して、出力と終了コードを返す。
+        /// 補助ツール相当のサブコマンド(--pdf2text など)の検証に使う。
+        /// </summary>
+        public string RunWithExitCode(string stdin, string[] args, int timeoutSec,
+                                      out int exitCode,
+                                      Dictionary<string, string> extraEnv = null)
+        {
+            using Process p = Start(args, extraEnv);
+            try
+            {
+                if (stdin != null)
+                {
+                    p.StandardInput.Write(stdin);
+                    p.StandardInput.Close();
+                }
+
+                StringBuilder sb = new();
+                StringBuilder err = new();
+                p.OutputDataReceived += (s, e) => { if (e.Data != null) sb.AppendLine(e.Data); };
+                p.ErrorDataReceived += (s, e) => { if (e.Data != null) err.AppendLine(e.Data); };
+                p.BeginOutputReadLine();
+                p.BeginErrorReadLine();
+
+                if (!p.WaitForExit(timeoutSec * 1000))
+                {
+                    try { p.Kill(true); } catch { }
+                    throw new TimeoutException("tau did not exit within " + timeoutSec + "s");
+                }
+                p.WaitForExit();
+                exitCode = p.ExitCode;
+                return (sb.ToString() + err.ToString()).Replace("\r\n", "\n");
+            }
+            catch
+            {
+                try { if (!p.HasExited) p.Kill(true); } catch { }
+                throw;
+            }
+        }
+
+        /// <summary>
         /// tau を起動し、出力を読み捨てながら動かし続ける。
         ///
         /// リダイレクトした出力を誰も読まないと、Windows ではパイプが詰まって

@@ -93,6 +93,75 @@ namespace Tau.Tests
             Assert.Contains("りんご", Json.AsString(x["content"]));
         }
 
+        // ---------------- tau.exe のサブコマンド ----------------
+
+        [Fact]
+        public void Pdf2textOptionPrintsText()
+        {
+            // tau.exe --pdf2text は pdf2text.exe と同じ動作をする。
+            string path = MakePdf("subcommand works");
+
+            string output = runner.Run("", new[] { "--pdf2text", path }, 60,
+                extraEnv: null);
+            Assert.Contains("subcommand works", output);
+        }
+
+        [Fact]
+        public void Pdf2textOptionSupportsDescribeAndJson()
+        {
+            string path = MakePdf("described");
+
+            string describe = runner.Run("", new[] { "--pdf2text", "--describe", path });
+            Assert.Contains("pages=", describe);
+
+            string json = runner.Run("", new[] { "--pdf2text", "--json", path });
+            Dictionary<string, object> d = Result(json);
+            Assert.Equal("true", Json.AsString(d["ok"]));
+            Assert.Contains("described", Json.AsString(d["text"]));
+            Assert.True(d.ContainsKey("pages"));
+        }
+
+        [Fact]
+        public void Word2textOptionPrintsText()
+        {
+            string output = runner.Run("", new[] { "--word2text", MakeDocx() });
+            Assert.Contains("テスト", output);
+            Assert.Contains("セルA1", output);
+        }
+
+        [Fact]
+        public void Excel2textOptionSupportsSheetAndRows()
+        {
+            string path = MakeXlsx();
+
+            string output = runner.Run("", new[] { "--excel2text", path });
+            Assert.Contains("りんご", output);
+
+            string json = runner.Run("", new[]
+            {
+                "--excel2text", "--json", "--sheet", "売上", "--rows", "5", path,
+            });
+            Dictionary<string, object> d = Result(json);
+            Assert.Equal("true", Json.AsString(d["ok"]));
+            Assert.Equal(5, Json.AsInt(d["maxRows"]));
+        }
+
+        [Fact]
+        public void ToolOptionReportsUsageErrors()
+        {
+            // 引数が無いときは使い方を出して終了コード 2。
+            string output = runner.RunWithExitCode("", new[] { "--pdf2text" }, 60,
+                out int usageCode);
+            Assert.Contains("usage:", output);
+            Assert.Equal(2, usageCode);
+
+            // ファイルが無いときは終了コード 1。
+            string missing = runner.RunWithExitCode("", new[] { "--word2text", "no-such-file.docx" }, 60,
+                out int missingCode);
+            Assert.Contains("does not exist", missing);
+            Assert.Equal(1, missingCode);
+        }
+
         // ---------------- サンプルの生成 ----------------
 
         // 最小構成の PDF を作る。テキストは WinAnsi の ASCII と UTF-16BE の両方。
