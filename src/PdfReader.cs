@@ -48,15 +48,29 @@ namespace Tau
                     return null;
                 }
 
+                if (doc.IsEncrypted)
+                {
+                    error = "this PDF is encrypted (password protected), so its text "
+                        + "cannot be read. Remove the protection and save it again.";
+                    return null;
+                }
+
                 StringBuilder sb = new();
                 int pages = 0;
 
-                foreach (PdfObject content in doc.PageContents())
+                foreach (PdfDocument.PageContent page in doc.Pages())
                 {
+                    PdfObject content = page.Content;
+                    if (content == null) continue;
+
                     string stream = doc.DecodeStream(content);
                     if (stream == null) continue;
                     pages++;
-                    string text = TextExtractor.Run(stream);
+                    if (stream.IndexOf("Tj", StringComparison.Ordinal) >= 0
+                        || stream.IndexOf("TJ", StringComparison.Ordinal) >= 0)
+                        doc.HadContent = true;
+
+                    string text = TextExtractor.Run(stream, page.Fonts);
                     if (text.Trim().Length > 0)
                     {
                         if (sb.Length > 0) sb.Append("\n\n");
@@ -65,10 +79,18 @@ namespace Tau
                 }
 
                 string result = Normalize(sb.ToString());
-                if (result.Length == 0)
+
+                // 制御文字だけ(グリフ番号がそのまま出た場合)は意味のある
+                // テキストではない。読み取れなかったものとして扱う。
+                if (!HasReadableText(result))
                 {
-                    error = "no text could be extracted. This PDF may be a scan "
-                        + "(image only) and needs OCR.";
+                    error = doc.HadContent
+                        ? "the PDF has text, but it could not be decoded "
+                          + "(the font lacks a ToUnicode map). Try converting it "
+                          + "to text with another tool, or save it as an image "
+                          + "and use OCR."
+                        : "no text could be extracted. This PDF may be a scan "
+                          + "(image only) and needs OCR.";
                     return null;
                 }
 
@@ -97,6 +119,21 @@ namespace Tau
                 return n;
             }
             catch { return 0; }
+        }
+
+        // 読める文字が十分にあるか(制御文字・置換文字だけは不可)
+        static bool HasReadableText(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return false;
+            int good = 0;
+            foreach (char c in s)
+            {
+                if (c == '\n' || c == '\t' || c == '\r') continue;
+                if (char.IsControl(c)) continue;
+                if (c == '\uFFFD' || c == '?') continue;
+                good++;
+            }
+            return good > 0;
         }
 
         static bool StartsWithPdfHeader(byte[] data)
@@ -146,6 +183,23 @@ namespace Tau
         // トレーラの /Root
         int rootRef = -1;
 
+        // オブジェクトストリーム(/Type /ObjStm)の中にあるオブジェクト。
+        // 番号 → (ストリーム番号, ストリーム内の位置)
+        readonly Dictionary<int, KeyValuePair<int, int>> compressed = new();
+
+        // 展開済みのオブジェクトストリーム。番号 → 本文
+        readonly Dictionary<int, string> objStmBodies = new();
+
+        // xref ストリーム(/Type /XRef)の辞書(あれば)
+        Dictionary<string, PdfObject> xrefDict;
+
+        // /Encrypt が指定されているか(暗号化 PDF)
+        public bool IsEncrypted { get; private set; }
+
+        // 内容ストリームに文字を描く命令(Tj / TJ)があったか。
+        // あったのに文字が取れない場合は、フォント側の問題。
+        public bool HadContent { get; set; }
+
 
         PdfDocument(byte[] data)
         {
@@ -156,6 +210,8 @@ namespace Tau
         {
             PdfDocument doc = new(data);
             if (!doc.ScanObjects()) return null;
+            doc.ReadXrefStream();
+            doc.IndexObjectStreams();
             doc.ReadTrailer();
             return doc;
         }
@@ -201,6 +257,151 @@ namespace Tau
             return offsets.Count > 0;
         }
 
+        // ---------------- xref ストリーム ----------------
+
+        // PDF 1.5 以降は trailer の代わりに /Type /XRef のストリームを使う。
+        // ここから /Root と、オブジェクトストリーム内のオブジェクトの
+        // 位置(W[0]=2 のエントリ)を取り出す。
+        void ReadXrefStream()
+        {
+            foreach (int num in offsets.Keys)
+            {
+                PdfObject o = GetObject(num);
+                if (o == null || o.Dict == null) continue;
+                if (!o.Dict.ContainsKey("Type")) continue;
+                if (o.Dict["Type"].NameValue != "XRef") continue;
+
+                xrefDict = o.Dict;
+
+                // /Root は直接入っていることが多い
+                if (rootRef < 0 && o.Dict.ContainsKey("Root"))
+                {
+                    int r = RefOf(o.Dict["Root"]);
+                    if (r >= 0) rootRef = r;
+                }
+
+                ReadXrefEntries(o);
+            }
+        }
+
+        // xref ストリームの本体を読み、type=2 のエントリを索引に足す。
+        void ReadXrefEntries(PdfObject o)
+        {
+            string body = DecodeStream(o);
+            if (body == null) return;
+
+            // /W [w0 w1 w2] のフィールド幅
+            int[] w = new int[] { 1, 4, 2 };
+            if (o.Dict.ContainsKey("W") && o.Dict["W"] != null && o.Dict["W"].IsArray)
+                w = ParseIntArray(o.Dict["W"].ArrayBody);
+            if (w.Length < 3 || w[0] <= 0 || w[1] <= 0 || w[2] <= 0) return;
+
+            // /Index [start count ...]。無ければ [0 Size]
+            int[] index = new int[] { 0, offsets.Count + 1 };
+            if (o.Dict.ContainsKey("Index") && o.Dict["Index"] != null && o.Dict["Index"].IsArray)
+                index = ParseIntArray(o.Dict["Index"].ArrayBody);
+
+            byte[] bytes = Encoding.Latin1.GetBytes(body);
+            int pos = 0;
+
+            for (int i = 0; i + 1 < index.Length; i += 2)
+            {
+                int start = index[i];
+                int count = index[i + 1];
+                for (int k = 0; k < count; k++)
+                {
+                    if (pos + w[0] + w[1] + w[2] > bytes.Length) return;
+
+                    int type = (w[0] == 0) ? 1 : ReadBigEndian(bytes, pos, w[0]);
+                    int field2 = ReadBigEndian(bytes, pos + w[0], w[1]);
+                    int field3 = ReadBigEndian(bytes, pos + w[0] + w[1], w[2]);
+                    pos += w[0] + w[1] + w[2];
+
+                    int objNum = start + k;
+
+                    if (type == 1)
+                    {
+                        // 通常のオブジェクト。ScanObjects で見つかっているはず。
+                        if (!offsets.ContainsKey(objNum)) offsets[objNum] = field2;
+                    }
+                    else if (type == 2)
+                    {
+                        // オブジェクトストリーム内。field2=ストリーム番号, field3=位置
+                        compressed[objNum] = new(field2, field3);
+                    }
+                }
+            }
+        }
+
+        static int[] ParseIntArray(string body)
+        {
+            List<int> list = new();
+            int i = 0;
+            while (i < body.Length)
+            {
+                i = SkipWs(body, i);
+                if (i >= body.Length) break;
+                int start = i;
+                if (body[i] == '-') i++;
+                while (i < body.Length && char.IsDigit(body[i])) i++;
+                if (i > start)
+                {
+                    if (int.TryParse(body.AsSpan(start, i - start), out int v)) list.Add(v);
+                }
+                else i++;
+            }
+            return list.ToArray();
+        }
+
+        static int ReadBigEndian(byte[] b, int pos, int width)
+        {
+            int v = 0;
+            for (int i = 0; i < width; i++) v = (v << 8) | b[pos + i];
+            return v;
+        }
+
+        // ---------------- オブジェクトストリーム ----------------
+
+        // /Type /ObjStm の中には複数のオブジェクトがまとめて入っている。
+        // 索引に無い番号は、ここから取り出す。
+        void IndexObjectStreams()
+        {
+            List<int> streams = new();
+            foreach (int num in offsets.Keys)
+            {
+                PdfObject o = GetObject(num);
+                if (o == null || o.Dict == null) continue;
+                if (!o.Dict.ContainsKey("Type")) continue;
+                if (o.Dict["Type"].NameValue != "ObjStm") continue;
+                streams.Add(num);
+            }
+
+            foreach (int num in streams)
+            {
+                PdfObject o = GetObject(num);
+                if (o == null) continue;
+
+                string body = DecodeStream(o);
+                if (body == null) continue;
+                objStmBodies[num] = body;
+
+                int n = o.Dict.ContainsKey("N") ? AsInt(o.Dict["N"]) : 0;
+                int first = o.Dict.ContainsKey("First") ? AsInt(o.Dict["First"]) : 0;
+                if (n <= 0 || first < 0) continue;
+
+                // 先頭に "<num> <offset> ..." が並ぶ
+                string header = body.Substring(0, Math.Min(first, body.Length));
+                int[] pairs = ParseIntArray(header);
+
+                for (int i = 0; i + 1 < pairs.Length && i / 2 < n; i += 2)
+                {
+                    int objNum = pairs[i];
+                    int off = pairs[i + 1];
+                    compressed[objNum] = new(num, off);
+                }
+            }
+        }
+
         static bool IsWhite(char c)
         {
             return c == ' ' || c == '\n' || c == '\r' || c == '\t' || c == '\f' || c == '\0';
@@ -226,20 +427,34 @@ namespace Tau
                         int r = RefOf(dict["Root"]);
                         if (r >= 0) rootRef = r;
                     }
+                    if (dict != null && dict.ContainsKey("Encrypt")) IsEncrypted = true;
                 }
             }
 
+            // xref ストリームに /Encrypt がある場合
+            if (xrefDict != null && xrefDict.ContainsKey("Encrypt")) IsEncrypted = true;
+
             // 古い PDF は trailer が無いことがある。Catalog を直接探す。
+            // オブジェクトストリームの中にある場合も探す。
             if (rootRef < 0)
             {
-                foreach (int num in offsets.Keys)
+                List<int> all = new(offsets.Keys);
+                foreach (int num in compressed.Keys)
+                    if (!all.Contains(num)) all.Add(num);
+
+                foreach (int num in all)
                 {
                     PdfObject o = GetObject(num);
-                    if (o != null && o.Dict != null && o.Dict.ContainsKey("Pages"))
+                    if (o == null || o.Dict == null) continue;
+                    if (!o.Dict.ContainsKey("Pages")) continue;
+
+                    // /Type /Catalog を優先する
+                    if (o.Dict.ContainsKey("Type") && o.Dict["Type"].NameValue == "Catalog")
                     {
                         rootRef = num;
                         break;
                     }
+                    if (rootRef < 0) rootRef = num;
                 }
             }
         }
@@ -248,16 +463,81 @@ namespace Tau
 
         public PdfObject GetObject(int num)
         {
-            if (!offsets.TryGetValue(num, out int pos)) return null;
-            string text = Latin1(data);
+            if (offsets.TryGetValue(num, out int pos))
+            {
+                string text = Latin1(data);
 
-            // "<num> <gen> obj" の後ろから辞書を読む
-            int obj = text.IndexOf("obj", pos, StringComparison.Ordinal);
-            if (obj < 0) return null;
-            int start = obj + 3;
-            while (start < text.Length && IsWhite(text[start])) start++;
+                // "<num> <gen> obj" の後ろから辞書を読む
+                int obj = text.IndexOf("obj", pos, StringComparison.Ordinal);
+                if (obj >= 0)
+                {
+                    int start = obj + 3;
+                    while (start < text.Length && IsWhite(text[start])) start++;
+                    PdfObject o = ParseValueAt(text, start);
+                    if (o != null) return o;
+                }
+            }
 
-            return ParseValueAt(text, start);
+            // オブジェクトストリームの中にある場合
+            if (compressed.TryGetValue(num, out KeyValuePair<int, int> where))
+            {
+                return GetCompressedObject(num, where.Key, where.Value);
+            }
+            return null;
+        }
+
+        // オブジェクトストリームの中の 1 オブジェクトを読む。
+        PdfObject GetCompressedObject(int num, int streamNum, int index)
+        {
+            if (!objStmBodies.TryGetValue(streamNum, out string body)) return null;
+            if (!offsets.TryGetValue(streamNum, out int pos)) return null;
+
+            PdfObject stm = GetObject(streamNum);
+            if (stm == null || stm.Dict == null) return null;
+            int first = stm.Dict.ContainsKey("First") ? AsInt(stm.Dict["First"]) : 0;
+
+            int start = first + index;
+            if (start < 0 || start >= body.Length) return null;
+
+            // オブジェクトは空白で区切られている。次のオブジェクトの開始位置まで読む。
+            int end = body.Length;
+            int depth = 0;
+            for (int i = start; i < body.Length; i++)
+            {
+                char c = body[i];
+                if (c == '<' && i + 1 < body.Length && body[i + 1] == '<') { depth++; i++; continue; }
+                if (c == '>' && i + 1 < body.Length && body[i + 1] == '>')
+                {
+                    depth--;
+                    i++;
+                    if (depth == 0)
+                    {
+                        // 辞書の終わり。直後が空白ならここまで。
+                        end = i + 1;
+                        break;
+                    }
+                    continue;
+                }
+            }
+
+            string fragment = body.Substring(start, Math.Max(0, end - start));
+            return ParseFragment(fragment);
+        }
+
+        // 単体の値(辞書・配列など)を文字列から読む。
+        static PdfObject ParseFragment(string fragment)
+        {
+            int i = SkipWs(fragment, 0);
+            if (i >= fragment.Length) return null;
+
+            if (string.CompareOrdinal(fragment, i, "<<", 0, 2) == 0)
+            {
+                int end = SkipDict(fragment, i);
+                Dictionary<string, PdfObject> dict = ParseDictBody(
+                    fragment.Substring(i + 2, Math.Max(0, end - i - 4)));
+                return PdfObject.DictObj(dict);
+            }
+            return null;
         }
 
         PdfObject ParseValueAt(string text, int start)
@@ -518,9 +798,16 @@ namespace Tau
         // ---------------- ページの内容ストリーム ----------------
 
         /// <summary>全ページの内容ストリーム(辞書付き)を順に返す。</summary>
-        public IEnumerable<PdfObject> PageContents()
+        // 1 ページ分の内容ストリームと、そのページのフォント対応。
+        public sealed class PageContent
         {
-            List<PdfObject> result = new();
+            public PdfObject Content;
+            public Dictionary<string, FontMap> Fonts = new();
+        }
+
+        public IEnumerable<PageContent> Pages()
+        {
+            List<PageContent> result = new();
             HashSet<int> seen = new();
 
             if (rootRef >= 0)
@@ -529,7 +816,7 @@ namespace Tau
                 if (catalog != null && catalog.Dict != null
                     && catalog.Dict.ContainsKey("Pages"))
                 {
-                    CollectPages(RefOf(catalog.Dict["Pages"]), seen, result);
+                    CollectPageNodes(RefOf(catalog.Dict["Pages"]), seen, result, null);
                 }
             }
 
@@ -543,14 +830,241 @@ namespace Tau
                     if (!o.Dict.ContainsKey("Type")) continue;
                     if (o.Dict["Type"].NameValue != "Page") continue;
                     if (!o.Dict.ContainsKey("Contents")) continue;
-                    PdfObject c = Resolve(o.Dict["Contents"]);
-                    if (c != null) result.Add(c);
+
+                    PageContent pc = new();
+                    pc.Content = Resolve(o.Dict["Contents"]);
+                    pc.Fonts = FontsOf(o.Dict, null);
+                    if (pc.Content != null) result.Add(pc);
                 }
             }
             return result;
         }
 
-        void CollectPages(int num, HashSet<int> seen, List<PdfObject> result)
+        // ページの内容ストリームだけを返す(後方互換用)
+        public IEnumerable<PdfObject> PageContents()
+        {
+            List<PdfObject> list = new();
+            foreach (PageContent p in Pages()) if (p.Content != null) list.Add(p.Content);
+            return list;
+        }
+
+        // ページの /Resources からフォント対応を取り出す。
+        // 親(Pages ノード)の Resources を継承する。
+        Dictionary<string, FontMap> FontsOf(Dictionary<string, PdfObject> pageDict,
+                                            Dictionary<string, PdfObject> inherited)
+        {
+            Dictionary<string, PdfObject> res = inherited;
+            if (pageDict != null && pageDict.ContainsKey("Resources"))
+            {
+                PdfObject r = Resolve(pageDict["Resources"]);
+                if (r != null && r.Dict != null) res = r.Dict;
+            }
+
+            Dictionary<string, FontMap> map = new();
+            if (res == null || !res.ContainsKey("Font")) return map;
+
+            PdfObject fonts = Resolve(res["Font"]);
+            if (fonts == null || fonts.Dict == null) return map;
+
+            foreach (KeyValuePair<string, PdfObject> kv in fonts.Dict)
+            {
+                PdfObject fontObj = Resolve(kv.Value);
+                if (fontObj == null || fontObj.Dict == null) continue;
+                map[kv.Key] = BuildFontMap(fontObj);
+            }
+            return map;
+        }
+
+        // フォントの /ToUnicode CMap を読む。無ければ null(その場合は
+        // 従来どおり、文字列をそのまま解釈する)。
+        FontMap BuildFontMap(PdfObject fontObj)
+        {
+            FontMap fm = new();
+
+            // 2 バイト文字か(Identity-H / Identity-V / Type0)
+            if (fontObj.Dict.ContainsKey("Subtype")
+                && fontObj.Dict["Subtype"].NameValue == "Type0")
+                fm.TwoByte = true;
+            if (fontObj.Dict.ContainsKey("Encoding"))
+            {
+                PdfObject enc = fontObj.Dict["Encoding"];
+                if (enc != null && enc.IsName
+                    && (enc.NameValue == "Identity-H" || enc.NameValue == "Identity-V"))
+                    fm.TwoByte = true;
+            }
+
+            if (!fontObj.Dict.ContainsKey("ToUnicode")) return fm;
+
+            PdfObject tu = Resolve(fontObj.Dict["ToUnicode"]);
+            if (tu == null) return fm;
+            string cmap = DecodeStream(tu);
+            if (cmap == null) return fm;
+
+            ParseToUnicode(cmap, fm);
+            return fm;
+        }
+
+        static void ParseToUnicode(string cmap, FontMap fm)
+        {
+            // bfchar: <src> <dst> の組
+            // bfrange: <lo> <hi> <dst> または <lo> <hi> [<d1> <d2> ...]
+            int i = 0;
+            while (i < cmap.Length)
+            {
+                int bfchar = cmap.IndexOf("beginbfchar", i, StringComparison.Ordinal);
+                int bfrange = cmap.IndexOf("beginbfrange", i, StringComparison.Ordinal);
+                if (bfchar < 0 && bfrange < 0) break;
+
+                bool isChar = (bfchar >= 0 && (bfrange < 0 || bfchar < bfrange));
+                int start = isChar ? bfchar + "beginbfchar".Length : bfrange + "beginbfrange".Length;
+                int endIdx = cmap.IndexOf(isChar ? "endbfchar" : "endbfrange", start,
+                    StringComparison.Ordinal);
+                if (endIdx < 0) break;
+
+                string body = cmap.Substring(start, endIdx - start);
+                if (isChar) ParseBfChar(body, fm);
+                else ParseBfRange(body, fm);
+
+                i = endIdx + 1;
+            }
+        }
+
+        static void ParseBfChar(string body, FontMap fm)
+        {
+            List<string> tokens = HexTokens(body);
+            for (int i = 0; i + 1 < tokens.Count; i += 2)
+            {
+                int src = HexToInt(tokens[i]);
+                string dst = HexToString(tokens[i + 1]);
+                if (src >= 0) fm.Map[src] = dst;
+            }
+        }
+
+        static void ParseBfRange(string body, FontMap fm)
+        {
+            // <lo> <hi> <dst> または <lo> <hi> [<d1> <d2> ...]
+            int i = 0;
+            while (i < body.Length)
+            {
+                int loStart = body.IndexOf('<', i);
+                if (loStart < 0) break;
+                int loEnd = body.IndexOf('>', loStart);
+                if (loEnd < 0) break;
+
+                int hiStart = body.IndexOf('<', loEnd);
+                if (hiStart < 0) break;
+                int hiEnd = body.IndexOf('>', hiStart);
+                if (hiEnd < 0) break;
+
+                int lo = HexToInt(body.Substring(loStart + 1, loEnd - loStart - 1));
+                int hi = HexToInt(body.Substring(hiStart + 1, hiEnd - hiStart - 1));
+
+                int after = hiEnd + 1;
+
+                // 配列形式か
+                int bracket = body.IndexOf('[', after);
+                int single = body.IndexOf('<', after);
+                if (bracket >= 0 && (single < 0 || bracket < single))
+                {
+                    int close = body.IndexOf(']', bracket);
+                    if (close < 0) close = body.Length;
+                    string list = body.Substring(bracket + 1, close - bracket - 1);
+                    List<string> tokens = HexTokens(list);
+                    for (int k = 0; k < tokens.Count && lo + k <= hi; k++)
+                        fm.Map[lo + k] = HexToString(tokens[k]);
+                    i = close + 1;
+                }
+                else if (single >= 0)
+                {
+                    int singleEnd = body.IndexOf('>', single);
+                    if (singleEnd < 0) break;
+                    string dstHex = body.Substring(single + 1, singleEnd - single - 1);
+                    byte[] dstBytes = HexToBytes(dstHex);
+
+                    for (int k = lo; k <= hi && k - lo < 65536; k++)
+                    {
+                        // 最後のバイト(または 16bit 値)を k-lo だけ増やす
+                        byte[] b = (byte[])dstBytes.Clone();
+                        if (b.Length >= 2)
+                        {
+                            int v = (b[b.Length - 2] << 8) | b[b.Length - 1];
+                            v += (k - lo);
+                            b[b.Length - 2] = (byte)(v >> 8);
+                            b[b.Length - 1] = (byte)v;
+                        }
+                        else if (b.Length == 1)
+                        {
+                            int v = b[0] + (k - lo);
+                            b[0] = (byte)v;
+                        }
+                        fm.Map[k] = DecodeUtf16Be(b);
+                    }
+                    i = singleEnd + 1;
+                }
+                else break;
+            }
+        }
+
+        static List<string> HexTokens(string s)
+        {
+            List<string> list = new();
+            int i = 0;
+            while (i < s.Length)
+            {
+                int start = s.IndexOf('<', i);
+                if (start < 0) break;
+                int end = s.IndexOf('>', start);
+                if (end < 0) break;
+                list.Add(s.Substring(start + 1, end - start - 1));
+                i = end + 1;
+            }
+            return list;
+        }
+
+        static int HexToInt(string hex)
+        {
+            if (hex == null || hex.Length == 0) return -1;
+            int v = 0;
+            foreach (char c in hex)
+            {
+                int d;
+                if (c >= '0' && c <= '9') d = c - '0';
+                else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+                else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+                else continue;
+                v = (v << 4) | d;
+            }
+            return v;
+        }
+
+        static byte[] HexToBytes(string hex)
+        {
+            if (hex == null) return Array.Empty<byte>();
+            StringBuilder clean = new();
+            foreach (char c in hex)
+                if (Uri.IsHexDigit(c)) clean.Append(c);
+            if (clean.Length % 2 == 1) clean.Append('0');
+
+            byte[] b = new byte[clean.Length / 2];
+            for (int i = 0; i < b.Length; i++)
+                b[i] = (byte)HexToInt(clean.ToString(i * 2, 2));
+            return b;
+        }
+
+        static string HexToString(string hex)
+        {
+            return DecodeUtf16Be(HexToBytes(hex));
+        }
+
+        static string DecodeUtf16Be(byte[] b)
+        {
+            if (b == null || b.Length == 0) return "";
+            if (b.Length == 1) return ((char)b[0]).ToString();
+            return Encoding.BigEndianUnicode.GetString(b);
+        }
+
+        void CollectPageNodes(int num, HashSet<int> seen, List<PageContent> result,
+                              Dictionary<string, PdfObject> inheritedResources)
         {
             if (num < 0 || seen.Contains(num)) return;
             seen.Add(num);
@@ -558,15 +1072,23 @@ namespace Tau
             PdfObject node = GetObject(num);
             if (node == null || node.Dict == null) return;
 
+            // 親から継承する /Resources
+            Dictionary<string, PdfObject> res = inheritedResources;
+            if (node.Dict.ContainsKey("Resources"))
+            {
+                PdfObject r = Resolve(node.Dict["Resources"]);
+                if (r != null && r.Dict != null) res = r.Dict;
+            }
+
             PdfObject type = node.Dict.ContainsKey("Type") ? node.Dict["Type"] : null;
 
             if (type != null && type.NameValue == "Page")
             {
+                PageContent pc = new();
                 if (node.Dict.ContainsKey("Contents"))
-                {
-                    PdfObject c = Resolve(node.Dict["Contents"]);
-                    if (c != null) result.Add(c);
-                }
+                    pc.Content = Resolve(node.Dict["Contents"]);
+                pc.Fonts = FontsOf(node.Dict, res);
+                result.Add(pc);
                 return;
             }
 
@@ -591,7 +1113,7 @@ namespace Tau
                         i = SkipWs(body, i);
                         if (i < body.Length && body[i] == 'R') i++;
 
-                        CollectPages(childNum, seen, result);
+                        CollectPageNodes(childNum, seen, result, res);
                     }
                 }
             }
@@ -627,55 +1149,196 @@ namespace Tau
             byte[] raw = new byte[Math.Max(0, end - start)];
             Array.Copy(data, start, raw, 0, raw.Length);
 
-            string filter = FilterName(o);
-            if (filter == "FlateDecode")
+            // /Filter は 1 つまたは配列。前から順に適用する。
+            List<string> filters = FilterNames(o);
+            if (filters.Count == 0) return Latin1(raw);
+
+            byte[] current = raw;
+            foreach (string f in filters)
             {
-                try
-                {
-                    using MemoryStream ms = new(raw);
-                    using ZLibStream z = new(ms, CompressionMode.Decompress);
-                    using MemoryStream outMs = new();
-                    z.CopyTo(outMs);
-                    return Latin1(outMs.ToArray());
-                }
-                catch
-                {
-                    // 一部の PDF は zlib ヘッダ無しの raw deflate
-                    try
-                    {
-                        using MemoryStream ms = new(raw);
-                        using DeflateStream d = new(ms, CompressionMode.Decompress);
-                        using MemoryStream outMs = new();
-                        d.CopyTo(outMs);
-                        return Latin1(outMs.ToArray());
-                    }
-                    catch { return null; }
-                }
+                current = ApplyFilter(f, current);
+                if (current == null) return null;
             }
-            if (filter == null || filter == "")
-                return Latin1(raw);
-            return null;   // 未対応の圧縮
+            return Latin1(current);
         }
 
-        static string FilterName(PdfObject o)
+        static byte[] ApplyFilter(string name, byte[] input)
         {
-            if (o.Dict == null || !o.Dict.ContainsKey("Filter")) return null;
-            PdfObject f = o.Dict["Filter"];
-            if (f == null) return null;
-            if (f.IsName) return f.NameValue;
-            if (f.IsArray && f.ArrayBody != null)
+            switch (name)
             {
-                int i = f.ArrayBody.IndexOf('/');
-                if (i >= 0)
+                case "FlateDecode":
+                case "Fl":
+                    try
+                    {
+                        using MemoryStream ms = new(input);
+                        using ZLibStream z = new(ms, CompressionMode.Decompress);
+                        using MemoryStream outMs = new();
+                        z.CopyTo(outMs);
+                        return outMs.ToArray();
+                    }
+                    catch
+                    {
+                        // 一部の PDF は zlib ヘッダ無しの raw deflate
+                        try
+                        {
+                            using MemoryStream ms = new(input);
+                            using DeflateStream d = new(ms, CompressionMode.Decompress);
+                            using MemoryStream outMs = new();
+                            d.CopyTo(outMs);
+                            return outMs.ToArray();
+                        }
+                        catch { return null; }
+                    }
+                case "ASCII85Decode":
+                case "A85":
+                    return Ascii85(input);
+                case "ASCIIHexDecode":
+                case "AHx":
+                    return AsciiHex(input);
+                case "RunLengthDecode":
+                case "RL":
+                    return RunLength(input);
+                default:
+                    return null;   // LZW / JPX / CCITT などは未対応
+            }
+        }
+
+        // ASCII85。Adobe 形式の <~ ~> にも対応する。
+        static byte[] Ascii85(byte[] input)
+        {
+            List<byte> outBytes = new();
+            int i = 0;
+            int n = input.Length;
+
+            // 先頭の <~ を飛ばす
+            if (n >= 2 && input[0] == '<' && input[1] == '~') i = 2;
+
+            uint tuple = 0;
+            int count = 0;
+            for (; i < n; i++)
+            {
+                byte b = input[i];
+                if (b == '~') break;                       // ~> の終わり
+                if (b <= ' ') continue;                     // 空白は無視
+                if (b == 'z' && count == 0)
                 {
-                    int start = i + 1;
-                    int end = start;
-                    while (end < f.ArrayBody.Length && !IsDelimiterOrWs(f.ArrayBody[end])) end++;
-                    return f.ArrayBody.Substring(start, end - start);
+                    outBytes.Add(0); outBytes.Add(0);
+                    outBytes.Add(0); outBytes.Add(0);
+                    continue;
+                }
+                if (b < '!' || b > 'u') continue;
+                tuple = tuple * 85 + (uint)(b - '!');
+                count++;
+                if (count == 5)
+                {
+                    outBytes.Add((byte)(tuple >> 24));
+                    outBytes.Add((byte)(tuple >> 16));
+                    outBytes.Add((byte)(tuple >> 8));
+                    outBytes.Add((byte)tuple);
+                    tuple = 0;
+                    count = 0;
                 }
             }
-            return null;
+            if (count > 0)
+            {
+                // 端数は 'u' で埋めて 4 バイトにし、余りを落とす
+                for (int k = count; k < 5; k++) tuple = tuple * 85 + 84;
+                outBytes.Add((byte)(tuple >> 24));
+                if (count > 1) outBytes.Add((byte)(tuple >> 16));
+                if (count > 2) outBytes.Add((byte)(tuple >> 8));
+                if (count > 3) outBytes.Add((byte)tuple);
+            }
+            return outBytes.ToArray();
         }
+
+        static byte[] AsciiHex(byte[] input)
+        {
+            List<byte> outBytes = new();
+            int hi = -1;
+            foreach (byte b in input)
+            {
+                int v;
+                if (b >= '0' && b <= '9') v = b - '0';
+                else if (b >= 'a' && b <= 'f') v = b - 'a' + 10;
+                else if (b >= 'A' && b <= 'F') v = b - 'A' + 10;
+                else if (b == '>') break;
+                else continue;
+
+                if (hi < 0) hi = v;
+                else
+                {
+                    outBytes.Add((byte)((hi << 4) | v));
+                    hi = -1;
+                }
+            }
+            if (hi >= 0) outBytes.Add((byte)(hi << 4));
+            return outBytes.ToArray();
+        }
+
+        static byte[] RunLength(byte[] input)
+        {
+            List<byte> outBytes = new();
+            int i = 0;
+            while (i < input.Length)
+            {
+                int len = input[i++];
+                if (len == 128) break;
+                if (len < 128)
+                {
+                    // そのまま len+1 バイト
+                    int n = len + 1;
+                    for (int k = 0; k < n && i < input.Length; k++) outBytes.Add(input[i++]);
+                }
+                else
+                {
+                    // 次の 1 バイトを 257-len 回繰り返す
+                    if (i >= input.Length) break;
+                    byte b = input[i++];
+                    int n = 257 - len;
+                    for (int k = 0; k < n; k++) outBytes.Add(b);
+                }
+            }
+            return outBytes.ToArray();
+        }
+
+        // /Filter の一覧(配列なら順番どおり)
+        static List<string> FilterNames(PdfObject o)
+        {
+            List<string> list = new();
+            if (o.Dict == null || !o.Dict.ContainsKey("Filter")) return list;
+            PdfObject f = o.Dict["Filter"];
+            if (f == null) return list;
+            if (f.IsName) { list.Add(f.NameValue); return list; }
+            if (f.IsArray && f.ArrayBody != null)
+            {
+                int i = 0;
+                string body = f.ArrayBody;
+                while (i < body.Length)
+                {
+                    int slash = body.IndexOf('/', i);
+                    if (slash < 0) break;
+                    int start = slash + 1;
+                    int end = start;
+                    while (end < body.Length && !IsDelimiterOrWs(body[end])) end++;
+                    list.Add(body.Substring(start, end - start));
+                    i = end;
+                }
+            }
+            return list;
+        }
+
+    }
+
+    // フォントの文字コード → 実際の文字(ToUnicode CMap)
+    sealed class FontMap
+    {
+        // コード → 文字列
+        public Dictionary<int, string> Map = new();
+
+        // 2 バイトで 1 文字か(Identity-H など)
+        public bool TwoByte;
+
+        public bool HasMap { get { return Map.Count > 0; } }
     }
 
     sealed class PdfObject
@@ -734,10 +1397,18 @@ namespace Tau
     {
         public static string Run(string content)
         {
+            return Run(content, null);
+        }
+
+        public static string Run(string content, Dictionary<string, FontMap> fonts)
+        {
             if (string.IsNullOrEmpty(content)) return "";
 
             StringBuilder sb = new();
             List<string> operands = new();
+
+            // 現在のフォント(Tf で切り替わる)
+            FontMap currentFont = null;
 
             int i = 0;
             while (i < content.Length)
@@ -755,7 +1426,7 @@ namespace Tau
                 if (c == '(')
                 {
                     string s = ReadLiteral(content, ref i);
-                    operands.Add(s);
+                    operands.Add(DecodeString(s, currentFont));
                     continue;
                 }
 
@@ -774,7 +1445,7 @@ namespace Tau
                         }
                         continue;
                     }
-                    string hex = ReadHex(content, ref i);
+                    string hex = ReadHex(content, ref i, currentFont);
                     operands.Add(hex);
                     continue;
                 }
@@ -788,11 +1459,11 @@ namespace Tau
                     {
                         if (content[i] == '(')
                         {
-                            arr.Append(ReadLiteral(content, ref i));
+                            arr.Append(DecodeString(ReadLiteral(content, ref i), currentFont));
                         }
                         else if (content[i] == '<')
                         {
-                            arr.Append(ReadHex(content, ref i));
+                            arr.Append(ReadHex(content, ref i, currentFont));
                         }
                         else if (content[i] == '-')
                         {
@@ -809,6 +1480,19 @@ namespace Tau
                     continue;
                 }
 
+                // 名前(/F1 など)。Tf でフォントを選ぶのに使う。
+                if (c == '/')
+                {
+                    int nameStart = ++i;
+                    while (i < content.Length && !char.IsWhiteSpace(content[i])
+                           && content[i] != '(' && content[i] != '<' && content[i] != '['
+                           && content[i] != ')' && content[i] != '>' && content[i] != ']'
+                           && content[i] != '/')
+                        i++;
+                    operands.Add("/" + content.Substring(nameStart, i - nameStart));
+                    continue;
+                }
+
                 // 演算子を読む
                 int opStart = i;
                 while (i < content.Length && !char.IsWhiteSpace(content[i])
@@ -819,6 +1503,13 @@ namespace Tau
 
                 if (i == opStart) { i++; continue; }
                 string op = content.Substring(opStart, i - opStart);
+
+                // 数値はオペランド(サイズ・位置など)。演算子ではない。
+                if (IsNumberToken(op))
+                {
+                    operands.Add(op);
+                    continue;
+                }
 
                 switch (op)
                 {
@@ -850,6 +1541,24 @@ namespace Tau
                         NewLine(sb);
                         operands.Clear();
                         break;
+                    case "Tf":
+                        // "<font> <size> Tf"。直前の名前からフォントを選ぶ。
+                        currentFont = null;
+                        if (fonts != null && operands.Count > 0)
+                        {
+                            for (int k = operands.Count - 1; k >= 0; k--)
+                            {
+                                string cand = operands[k];
+                                if (cand.Length > 0 && cand[0] == '/')
+                                {
+                                    string key = cand.Substring(1);
+                                    if (fonts.ContainsKey(key)) currentFont = fonts[key];
+                                    break;
+                                }
+                            }
+                        }
+                        operands.Clear();
+                        break;
                     default:
                         // 数値などは捨てる(次の Tj で使わない)
                         if (op != "BT" && op != "Tf" && op != "TL" && op != "Tc"
@@ -860,6 +1569,23 @@ namespace Tau
             }
 
             return sb.ToString();
+        }
+
+        // 数値トークンか(12, -3.5, .5 など)
+        static bool IsNumberToken(string t)
+        {
+            if (t.Length == 0) return false;
+            int i = 0;
+            if (t[0] == '+' || t[0] == '-') i++;
+            bool digit = false;
+            for (; i < t.Length; i++)
+            {
+                char c = t[i];
+                if (c >= '0' && c <= '9') { digit = true; continue; }
+                if (c == '.') continue;
+                return false;
+            }
+            return digit;
         }
 
         static void NewLine(StringBuilder sb)
@@ -930,6 +1656,11 @@ namespace Tau
 
         static string ReadHex(string s, ref int i)
         {
+            return ReadHex(s, ref i, null);
+        }
+
+        static string ReadHex(string s, ref int i, FontMap font)
+        {
             // s[i] == '<'
             i++;
             StringBuilder hex = new();
@@ -940,8 +1671,13 @@ namespace Tau
             }
             if (i < s.Length) i++;
 
-            // UTF-16BE (BOM 付き) か、1 バイト文字かを判定する
             byte[] bytes = HexToBytes(hex.ToString());
+
+            // ToUnicode があれば、それで文字に変換する
+            if (font != null && font.HasMap)
+                return DecodeWithMap(bytes, font);
+
+            // UTF-16BE (BOM 付き) か、1 バイト文字かを判定する
             if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF)
                 return Encoding.BigEndianUnicode.GetString(bytes, 2, bytes.Length - 2);
 
@@ -951,6 +1687,37 @@ namespace Tau
                 byte b = bytes[k];
                 // PDFDocEncoding の ASCII 部分だけ扱う
                 sb.Append(b < 0x80 ? (char)b : '?');
+            }
+            return sb.ToString();
+        }
+
+        // リテラル文字列を、フォントに応じて文字へ変換する。
+        // ToUnicode が無い場合は、そのまま返す(従来の動作)。
+        static string DecodeString(string raw, FontMap font)
+        {
+            if (font == null || !font.HasMap || raw.Length == 0) return raw;
+            byte[] bytes = Encoding.Latin1.GetBytes(raw);
+            return DecodeWithMap(bytes, font);
+        }
+
+        // フォントのコード列を、ToUnicode の対応表で文字列にする。
+        static string DecodeWithMap(byte[] bytes, FontMap font)
+        {
+            StringBuilder sb = new();
+            if (font.TwoByte)
+            {
+                for (int k = 0; k + 1 < bytes.Length; k += 2)
+                {
+                    int code = (bytes[k] << 8) | bytes[k + 1];
+                    if (font.Map.TryGetValue(code, out string ch)) sb.Append(ch);
+                }
+            }
+            else
+            {
+                for (int k = 0; k < bytes.Length; k++)
+                {
+                    if (font.Map.TryGetValue(bytes[k], out string ch)) sb.Append(ch);
+                }
             }
             return sb.ToString();
         }

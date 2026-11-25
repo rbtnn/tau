@@ -836,11 +836,27 @@ Office をインストールしていなくても読めます。COM は使いま
 
 | 形式 | 読み取り方法 | 取り出せるもの |
 |---|---|---|
-| PDF (`.pdf`) | PDF の構文を自前で解析 | テキスト（FlateDecode 圧縮・UTF-16 文字列に対応） |
+| PDF (`.pdf`) | PDF の構文を自前で解析 | テキスト（下記の形式に対応） |
 | Word (`.docx`) | ZIP 内の `word/document.xml` | 本文・見出し・表（セルはタブ区切り） |
 | Excel (`.xlsx`) | ZIP 内の `xl/*.xml` | 各シートのセル（タブ区切り、共有文字列対応） |
 
-- スキャンしただけの PDF は文字を持たないため、OCR が必要と返します。
+PDF は次の形式に対応しています。
+
+| 項目 | 対応 |
+|---|---|
+| 圧縮 | FlateDecode / ASCII85 / ASCIIHex / RunLength（連鎖も可） |
+| 文書構造 | オブジェクトストリーム（`/ObjStm`）・xref ストリーム（`/XRef`） |
+| フォント | CID フォント（`Identity-H`）+ `ToUnicode` CMap |
+| 暗号化 | 検出して「暗号化されている」と返す（復号はしない） |
+
+読めないときは理由を返します。
+
+| 症状 | 返るメッセージ |
+|---|---|
+| 画像だけ | `This PDF may be a scan (image only) and needs OCR.` |
+| パスワード保護 | `this PDF is encrypted (password protected)` |
+| フォントに `ToUnicode` がない | `the font lacks a ToUnicode map` |
+
 - 旧形式の `.doc` / `.xls` / `.ppt` は非対応です。PDF か `.docx` / `.xlsx` で保存し直してください。
 - Excel は既定で各シート先頭 200 行までです。`sheet` でシートを指定できます。
 
@@ -1131,6 +1147,7 @@ Python は不要です。
 | `tests/ToolExecutorTests.cs` | 空白・引用符を含むシェルコマンド、標準出力・標準エラー・終了コード |
 | `tests/DocumentReaderTests.cs` | PDF / Word / Excel の抽出・圧縮・UTF-16・表・シート選択・非対応形式 |
 | `tests/DocumentSizeTests.cs` | 大きな文書の分割読み取り・続きの位置・コンテキストへの収まり |
+| `tests/PdfStructureTests.cs` | ObjStm / XRef ストリーム・各種フィルタ・CID フォント・暗号化 |
 | `tests/DiagnosticsProxyTests.cs` | プロキシ経由の TLS ハンドシェイク・CONNECT・認証・経路選択 |
 | `tests/TauRunnerTests.cs` | テスト用 DLL がフレームワーク依存であること |
 
@@ -1154,7 +1171,7 @@ Python は不要です。
 | `tests/HistoryDisplayTests.cs` | 再起動後のツール詳細・旧形式との混在・重複防止・不完全な履歴 |
 
 ```
-Passed!  - Failed: 0, Passed: 491, Skipped: 0, Total: 491
+Passed!  - Failed: 0, Passed: 499, Skipped: 0, Total: 499
 ```
 
 所要時間は約 30 秒です。
