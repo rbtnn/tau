@@ -2,39 +2,62 @@
 setlocal
 
 rem ---------------------------------------------------------------------------
-rem  build.bat - tau.exe ‚ğ .NET SDK 10 ‚Ì dotnet publish ‚Åƒrƒ‹ƒh‚µ‚Ü‚·B
-rem  ’Pˆêƒtƒ@ƒCƒ‹‚Ì©ŒÈŠ®Œ‹ƒoƒCƒiƒŠ‚ğì‚é‚Ì‚ÅA.NET ƒ‰ƒ“ƒ^ƒCƒ€‚Í•s—v‚Å‚·B
+rem  build.bat - tau.exe ã¨è£œåŠ©ãƒ„ãƒ¼ãƒ«ã‚’ .NET SDK 10 ã® dotnet publish ã§ãƒ“ãƒ«ãƒ‰ã—ã¾ã™ã€‚
+rem  å˜ä¸€ãƒ•ã‚¡ã‚¤ãƒ«ã®è‡ªå·±å®Œçµãƒã‚¤ãƒŠãƒªãªã®ã§ã€.NET ãƒ©ãƒ³ã‚¿ã‚¤ãƒ ã¯ä¸è¦ã§ã™ã€‚
 rem
-rem  tau ‚ÍƒRƒ“ƒ\[ƒ‹ã‚Å“®‚­ AI ƒG[ƒWƒFƒ“ƒg‚Å‚·(Web UI ‚Í‚ ‚è‚Ü‚¹‚ñ)B
-rem  İ’è‚ÆƒZƒbƒVƒ‡ƒ“‚Í tau “Æ©‚Ìƒtƒ@ƒCƒ‹‚ğg‚¢‚Ü‚·:
+rem  tau ã¯ã‚³ãƒ³ã‚½ãƒ¼ãƒ«ä¸Šã§å‹•ã AI ã‚¨ãƒ¼ã‚¸ã‚§ãƒ³ãƒˆã§ã™(Web UI ã¯ --web ã®ã¿)ã€‚
+rem  è¨­å®šã¨ã‚»ãƒƒã‚·ãƒ§ãƒ³ã¯ tau ç‹¬è‡ªã®ãƒ•ã‚¡ã‚¤ãƒ«ã‚’ä½¿ã„ã¾ã™:
 rem    %APPDATA%\tau-cli\tau.json
 rem    %APPDATA%\tau-cli\sessions\<id>.json
+rem
+rem  è£œåŠ©ãƒ„ãƒ¼ãƒ«(read_document ãŒä½¿ã†):
+rem    pdf2text.exe    PDF ã‹ã‚‰ãƒ†ã‚­ã‚¹ãƒˆã‚’å–ã‚Šå‡ºã™
+rem    word2text.exe   Word (.docx) ã‹ã‚‰ãƒ†ã‚­ã‚¹ãƒˆã‚’å–ã‚Šå‡ºã™
+rem    excel2text.exe  Excel (.xlsx) ã‹ã‚‰ãƒ†ã‚­ã‚¹ãƒˆã‚’å–ã‚Šå‡ºã™
+rem  tau.exe ã¨åŒã˜ãƒ•ã‚©ãƒ«ãƒ€ã«ç½®ãã¾ã™ã€‚
 rem ---------------------------------------------------------------------------
 
 cd /d "%~dp0"
 
 where dotnet >nul 2>nul
 if %errorlevel% neq 0 (
-    echo [ERROR] dotnet ‚ªŒ©‚Â‚©‚è‚Ü‚¹‚ñB.NET SDK 10 ‚ğƒCƒ“ƒXƒg[ƒ‹‚µ‚Ä‚­‚¾‚³‚¢B
+    echo [ERROR] dotnet ãŒè¦‹ã¤ã‹ã‚Šã¾ã›ã‚“ã€‚.NET SDK 10 ã‚’ã‚¤ãƒ³ã‚¹ãƒˆãƒ¼ãƒ«ã—ã¦ãã ã•ã„ã€‚
     echo         winget install Microsoft.DotNet.SDK.10
     exit /b 1
 )
 
-echo ƒrƒ‹ƒh’†: dotnet publish -c Release -r win-x64
+echo ãƒ“ãƒ«ãƒ‰ä¸­: dotnet publish -c Release -r win-x64
 dotnet publish "%~dp0tau-cli.csproj" -c Release -r win-x64 ^
     --self-contained -p:PublishSingleFile=true -o "%~dp0dist"
 if errorlevel 1 (
     echo.
-    echo [ERROR] ƒrƒ‹ƒh‚É¸”s‚µ‚Ü‚µ‚½B
+    echo [ERROR] tau ã®ãƒ“ãƒ«ãƒ‰ã«å¤±æ•—ã—ã¾ã—ãŸã€‚
     exit /b 1
+)
+
+rem è£œåŠ©ãƒ„ãƒ¼ãƒ«ã‚’åŒã˜ dist ã¸å‡ºåŠ›ã™ã‚‹
+for %%T in (pdf2text word2text excel2text) do (
+    echo ãƒ“ãƒ«ãƒ‰ä¸­: %%T
+    dotnet publish "%~dp0src\%%T\%%T.csproj" -c Release -r win-x64 ^
+        --self-contained -p:PublishSingleFile=true -o "%~dp0dist"
+    if errorlevel 1 (
+        echo.
+        echo [ERROR] %%T ã®ãƒ“ãƒ«ãƒ‰ã«å¤±æ•—ã—ã¾ã—ãŸã€‚
+        exit /b 1
+    )
 )
 
 if exist "%~dp0dist\tau.exe" (
     copy /y "%~dp0dist\tau.exe" "%~dp0tau.exe" >nul
 )
+for %%T in (pdf2text word2text excel2text) do (
+    if exist "%~dp0dist\%%T.exe" (
+        copy /y "%~dp0dist\%%T.exe" "%~dp0%%T.exe" >nul
+    )
+)
 
 echo.
-echo ƒrƒ‹ƒhŠ®—¹: tau.exe
-echo   Às: tau.exe
-echo   ƒwƒ‹ƒv: tau.exe --help
+echo ãƒ“ãƒ«ãƒ‰å®Œäº†: tau.exe, pdf2text.exe, word2text.exe, excel2text.exe
+echo   å®Ÿè¡Œ: tau.exe
+echo   ãƒ˜ãƒ«ãƒ—: tau.exe --help
 endlocal

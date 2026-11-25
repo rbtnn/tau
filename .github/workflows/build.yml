@@ -38,7 +38,11 @@ jobs:
         run: dotnet restore tests/tests.csproj
 
       - name: Check formatting
-        run: dotnet format tau-cli.csproj --verify-no-changes --verbosity diagnostic
+        run: |
+          dotnet format tau-cli.csproj --verify-no-changes --verbosity diagnostic
+          dotnet format src/pdf2text/pdf2text.csproj --verify-no-changes
+          dotnet format src/word2text/word2text.csproj --verify-no-changes
+          dotnet format src/excel2text/excel2text.csproj --verify-no-changes
 
       - name: Test
         run: dotnet test tests/tests.csproj -c Release --no-restore
@@ -123,12 +127,24 @@ jobs:
           -p:PublishSingleFile=true
           -o publish/${{ matrix.rid }}
 
+      - name: Publish helper tools
+        run: |
+          for tool in pdf2text word2text excel2text; do
+            dotnet publish "src/$tool/$tool.csproj" \
+              -c Release \
+              -r ${{ matrix.rid }} \
+              --self-contained \
+              -p:PublishSingleFile=true \
+              -o "publish/${{ matrix.rid }}"
+          done
+
       - name: Package
         shell: bash
         run: |
           cd "publish/${{ matrix.rid }}"
           rm -f ./*.pdb
-          zip -q "../../tau-${{ matrix.rid }}.zip" tau.exe
+          zip -q "../../tau-${{ matrix.rid }}.zip" \
+            tau.exe pdf2text.exe word2text.exe excel2text.exe
 
       - uses: actions/upload-artifact@v4
         with:

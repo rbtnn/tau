@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>excel2text</AssemblyName>
+    <RootNamespace>Excel2Text</RootNamespace>
+
+    <LangVersion>latest</LangVersion>
+
+    <!-- ソースは src/excel2text/ 配下 -->
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- tau と同じ配布形態にする(単一ファイル・自己完結) -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifiers>win-x86;win-x64</RuntimeIdentifiers>
+
+    <!--
+      テストはフレームワーク依存でビルドする (SelfContained=false)。
+      Windows の SDK では RID を指定したまま SelfContained=false でビルド
+      すると NuGet が "Value cannot be null (path1)" で失敗するため、
+      その場合は RID を空にする。
+    -->
+    <RuntimeIdentifiers Condition="'$(SelfContained)' == 'false'"></RuntimeIdentifiers>
+
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+
+    <Version>1.0.0</Version>
+    <Authors>rbtnn</Authors>
+    <Description>excel2text - extract text from Excel files</Description>
+
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CS0162;CS0219</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="*.cs" />
+  </ItemGroup>
+
+  <!-- テストから内部クラスを参照できるようにする -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>tau-tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>

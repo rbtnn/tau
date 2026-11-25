@@ -22,7 +22,7 @@ namespace Tau.Tests
         readonly Dictionary<string, string> savedEnv = new();
         static readonly string[] EnvKeys =
         {
-            "HOME", "XDG_CONFIG_HOME", "APPDATA", "TAU_DATA_DIR",
+            "HOME", "XDG_CONFIG_HOME", "APPDATA", "TAU_DATA_DIR", "TAU_HELPERS_DIR",
             "TAU_CONFIG", "TAU_INPUT_ENCODING", "TAU_DEBUG",
             "TAU_AMBIGUOUS_WIDTH", "TAU_TEST_NO_INPUT", "TAU_TEST_WIDTH_FILE",
             "LLM_API_URL", "LLM_API_KEY", "LLM_MODEL", "ALLOW_TOOLS",
@@ -57,6 +57,13 @@ namespace Tau.Tests
             // Windows では %APPDATA% を HOME / XDG_CONFIG_HOME で
             // 差し替えられない。TAU_DATA_DIR で保存先を固定する。
             Environment.SetEnvironmentVariable("TAU_DATA_DIR", DataDir);
+
+            // read_document は pdf2text などを別プロセスで呼ぶ。
+            // tests.csproj が tests/tau-fx/helpers に用意している。
+            string helpers = Path.Combine(RepoRoot(), "tests", "tau-fx", "helpers");
+            if (!Directory.Exists(helpers))
+                Console.Error.WriteLine("helpers dir missing: " + helpers);
+            Environment.SetEnvironmentVariable("TAU_HELPERS_DIR", helpers);
         }
 
         /// <summary>設定ファイルを書く。</summary>
@@ -257,6 +264,8 @@ namespace Tau.Tests
             // 差し替わらないため)。
             string dataDir = Environment.GetEnvironmentVariable("TAU_DATA_DIR");
             if (dataDir != null) psi.Environment["TAU_DATA_DIR"] = dataDir;
+            string helpersDir = Environment.GetEnvironmentVariable("TAU_HELPERS_DIR");
+            if (helpersDir != null) psi.Environment["TAU_HELPERS_DIR"] = helpersDir;
             if (extraEnv != null)
                 foreach (KeyValuePair<string, string> kv in extraEnv)
                     psi.Environment[kv.Key] = kv.Value;

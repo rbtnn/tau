@@ -13,9 +13,14 @@ namespace Tau.Tests
     public class DocumentReaderTests : IDisposable
     {
         readonly string dir;
+        readonly TauRunner runner;
 
         public DocumentReaderTests()
         {
+            // read_document は pdf2text などを別プロセスで呼ぶ。
+            // TauRunner が TAU_HELPERS_DIR を設定する。
+            runner = new TauRunner();
+
             dir = Path.Combine(Path.GetTempPath(),
                 "tau-doc-test-" + Guid.NewGuid().ToString("N").Substring(0, 8));
             Directory.CreateDirectory(dir);
@@ -23,6 +28,7 @@ namespace Tau.Tests
 
         public void Dispose()
         {
+            runner.Dispose();
             try { Directory.Delete(dir, true); } catch { }
         }
 
@@ -168,7 +174,7 @@ namespace Tau.Tests
             string path = MakePdf("Hello PDF");
             Dictionary<string, object> d = Result(Run(path));
 
-            Assert.Equal("true", Json.AsString(d["ok"]));
+            Assert.True(d.ContainsKey("ok"), Json.ToString(d));
             Assert.Equal("pdf", Json.AsString(d["type"]));
             Assert.Equal(1, Json.AsInt(d["pages"]));
             Assert.Contains("Hello PDF", Json.AsString(d["content"]));

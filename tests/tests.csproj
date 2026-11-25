@@ -16,7 +16,14 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\tau-cli.csproj" />
+    <!--
+      tau-cli.csproj は自己完結 + 単一ファイル配布なので、そのまま参照すると
+      restore が RID 付きになり "Assets file ... doesn't have a target for
+      net10.0/<rid>" で失敗する。テストからはフレームワーク依存で使う。
+    -->
+    <ProjectReference Include="..\tau-cli.csproj">
+      <AdditionalProperties>SelfContained=false;PublishSingleFile=false;RuntimeIdentifier=;RuntimeIdentifiers=</AdditionalProperties>
+    </ProjectReference>
   </ItemGroup>
 
   <ItemGroup>
@@ -30,13 +37,20 @@
     (テスト実行中にビルドすると、並列実行するテストと競合する)
   -->
   <PropertyGroup>
-    <TauTestFxDir>$(MSBuildThisFileDirectory)tau-fx\bin\</TauTestFxDir>
+    <TauTestFxDir>$(MSBuildThisFileDirectory)tau-fx\bin</TauTestFxDir>
+    <!-- read_document が呼ぶ補助ツール(pdf2text など)の置き場所 -->
+    <TauHelpersDir>$(MSBuildThisFileDirectory)tau-fx\helpers</TauHelpersDir>
   </PropertyGroup>
 
-  <Target Name="BuildTauForTests" BeforeTargets="VSTest">
-    <MSBuild Projects="$(MSBuildThisFileDirectory)..\tau-cli.csproj"
-             Targets="Build"
-             Properties="Configuration=Release;PublishSingleFile=false;SelfContained=false;OutputPath=$(TauTestFxDir)" />
+  <Target Name="BuildTauForTests" BeforeTargets="PrepareForBuild;Build">
+    <!--
+      補助プロジェクトは tests の restore 対象外なので、MSBuild タスクでは
+      RID 付きの assets が無く失敗する。dotnet build を別プロセスで呼ぶ。
+    -->
+    <Exec Command="dotnet build &quot;$(MSBuildThisFileDirectory)..\tau-cli.csproj&quot; -c Release -p:PublishSingleFile=false -p:SelfContained=false --nologo -v quiet -o &quot;$(TauTestFxDir)&quot;" />
+    <Exec Command="dotnet build &quot;$(MSBuildThisFileDirectory)..\src\pdf2text\pdf2text.csproj&quot; -c Release -p:PublishSingleFile=false -p:SelfContained=false --nologo -v quiet -o &quot;$(TauHelpersDir)&quot;" />
+    <Exec Command="dotnet build &quot;$(MSBuildThisFileDirectory)..\src\word2text\word2text.csproj&quot; -c Release -p:PublishSingleFile=false -p:SelfContained=false --nologo -v quiet -o &quot;$(TauHelpersDir)&quot;" />
+    <Exec Command="dotnet build &quot;$(MSBuildThisFileDirectory)..\src\excel2text\excel2text.csproj&quot; -c Release -p:PublishSingleFile=false -p:SelfContained=false --nologo -v quiet -o &quot;$(TauHelpersDir)&quot;" />
   </Target>
 
 </Project>

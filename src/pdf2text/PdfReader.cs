@@ -1,11 +1,11 @@
 // ---------------------------------------------------------------------------
-//  tau - コンソール上で動く AI エージェント
-//
-//  PDF のテキスト抽出。
+//  pdf2text - PDF からテキストを取り出す (tau の補助ツール)
 //
 //  COM / 外部ライブラリは使わず、PDF の構文を直接読む。
 //  対象は「テキストを持つ普通の PDF」。スキャン画像だけの PDF は
 //  文字を取り出せないので、その旨を返す。
+//
+//  tau の read_document は、この exe を子プロセスとして呼び出す。
 // ---------------------------------------------------------------------------
 using System;
 using System.Collections.Generic;
@@ -13,7 +13,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Text;
 
-namespace Tau
+namespace Pdf2Text
 {
     static class PdfReader
     {
@@ -60,17 +60,23 @@ namespace Tau
 
                 foreach (PdfDocument.PageContent page in doc.Pages())
                 {
-                    PdfObject content = page.Content;
-                    if (content == null) continue;
+                    // 1 ページに複数の内容ストリームがある場合は連結して読む。
+                    StringBuilder pageText = new();
+                    foreach (PdfObject content in page.Contents)
+                    {
+                        string stream = doc.DecodeStream(content);
+                        if (stream == null) continue;
 
-                    string stream = doc.DecodeStream(content);
-                    if (stream == null) continue;
+                        if (stream.IndexOf("Tj", StringComparison.Ordinal) >= 0
+                            || stream.IndexOf("TJ", StringComparison.Ordinal) >= 0)
+                            doc.HadContent = true;
+
+                        pageText.Append(TextExtractor.Run(stream, page.Fonts));
+                        pageText.Append('\n');
+                    }
                     pages++;
-                    if (stream.IndexOf("Tj", StringComparison.Ordinal) >= 0
-                        || stream.IndexOf("TJ", StringComparison.Ordinal) >= 0)
-                        doc.HadContent = true;
 
-                    string text = TextExtractor.Run(stream, page.Fonts);
+                    string text = pageText.ToString();
                     if (text.Trim().Length > 0)
                     {
                         if (sb.Length > 0) sb.Append("\n\n");
@@ -106,6 +112,80 @@ namespace Tau
             }
         }
 
+        // 読めない PDF の構造を調べる。原因の切り分け用。
+        public static string Describe(string path)
+        {
+            try
+            {
+                byte[] data = File.ReadAllBytes(path);
+                StringBuilder sb = new();
+                sb.Append("size=").Append(data.Length);
+
+                // バージョン
+                string head = Latin1(data).Substring(0, Math.Min(64, data.Length));
+                int v = head.IndexOf("%PDF-");
+                if (v >= 0)
+                {
+                    int end = head.IndexOfAny(new[] { '\r', '\n' }, v);
+                    if (end < 0) end = head.Length;
+                    sb.Append("  version=").Append(head.Substring(v + 5, end - v - 5));
+                }
+
+                PdfDocument doc = PdfDocument.Parse(data);
+                if (doc == null)
+                {
+                    sb.Append("  parse=FAILED");
+                    return sb.ToString();
+                }
+
+                sb.Append("  objects=").Append(doc.ObjectCount);
+                sb.Append("  objstm=").Append(doc.CompressedCount);
+                sb.Append("  encrypted=").Append(doc.IsEncrypted ? "yes" : "no");
+
+                int pages = 0;
+                int streams = 0;
+                int filters = 0;
+                int decoded = 0;
+                List<string> filterNames = new();
+
+                foreach (PdfDocument.PageContent page in doc.Pages())
+                {
+                    pages++;
+                    foreach (PdfObject c in page.Contents)
+                    {
+                        streams++;
+                        List<string> f = doc.FiltersOf(c);
+                        foreach (string name in f)
+                        {
+                            filters++;
+                            if (!filterNames.Contains(name)) filterNames.Add(name);
+                        }
+                        if (doc.DecodeStream(c) != null) decoded++;
+                    }
+                }
+
+                sb.Append("  pages=").Append(pages);
+                sb.Append("  contents=").Append(streams);
+                sb.Append("  decoded=").Append(decoded);
+                sb.Append("  filters=[").Append(string.Join(",", filterNames)).Append(']');
+                return sb.ToString();
+            }
+            catch (Exception ex)
+            {
+                return "describe failed: " + ex.Message;
+            }
+        }
+
+        static bool Contains(byte[] data, string s)
+        {
+            return Encoding.Latin1.GetString(data).Contains(s);
+        }
+
+        static string Latin1(byte[] b)
+        {
+            return Encoding.Latin1.GetString(b);
+        }
+
         /// <summary>ページ数を数える。</summary>
         public static int CountPages(string path)
         {
@@ -115,7 +195,8 @@ namespace Tau
                 PdfDocument doc = PdfDocument.Parse(data);
                 if (doc == null) return 0;
                 int n = 0;
-                foreach (PdfObject c in doc.PageContents()) if (c != null) n++;
+                foreach (PdfDocument.PageContent page in doc.Pages())
+                    if (page.Contents.Count > 0) n++;
                 return n;
             }
             catch { return 0; }
@@ -193,6 +274,9 @@ namespace Tau
         // xref ストリーム(/Type /XRef)の辞書(あれば)
         Dictionary<string, PdfObject> xrefDict;
 
+        public int ObjectCount { get { return offsets.Count; } }
+        public int CompressedCount { get { return compressed.Count; } }
+
         // /Encrypt が指定されているか(暗号化 PDF)
         public bool IsEncrypted { get; private set; }
 
@@ -264,7 +348,8 @@ namespace Tau
         // 位置(W[0]=2 のエントリ)を取り出す。
         void ReadXrefStream()
         {
-            foreach (int num in offsets.Keys)
+            // ReadXrefEntries が offsets に足すので、キーをコピーしてから回す。
+            foreach (int num in new List<int>(offsets.Keys))
             {
                 PdfObject o = GetObject(num);
                 if (o == null || o.Dict == null) continue;
@@ -294,7 +379,10 @@ namespace Tau
             int[] w = new int[] { 1, 4, 2 };
             if (o.Dict.ContainsKey("W") && o.Dict["W"] != null && o.Dict["W"].IsArray)
                 w = ParseIntArray(o.Dict["W"].ArrayBody);
-            if (w.Length < 3 || w[0] <= 0 || w[1] <= 0 || w[2] <= 0) return;
+            // 幅が 0 のフィールドは「既定値」を使う規格なので許容する。
+            if (w.Length < 3) return;
+            if (w[0] < 0 || w[1] < 0 || w[2] < 0) return;
+            if (w[0] + w[1] + w[2] == 0) return;
 
             // /Index [start count ...]。無ければ [0 Size]
             int[] index = new int[] { 0, offsets.Count + 1 };
@@ -312,9 +400,10 @@ namespace Tau
                 {
                     if (pos + w[0] + w[1] + w[2] > bytes.Length) return;
 
+                    // 幅 0 のフィールドは既定値(type=1, field3=0)
                     int type = (w[0] == 0) ? 1 : ReadBigEndian(bytes, pos, w[0]);
-                    int field2 = ReadBigEndian(bytes, pos + w[0], w[1]);
-                    int field3 = ReadBigEndian(bytes, pos + w[0] + w[1], w[2]);
+                    int field2 = (w[1] == 0) ? 0 : ReadBigEndian(bytes, pos + w[0], w[1]);
+                    int field3 = (w[2] == 0) ? 0 : ReadBigEndian(bytes, pos + w[0] + w[1], w[2]);
                     pos += w[0] + w[1] + w[2];
 
                     int objNum = start + k;
@@ -366,8 +455,10 @@ namespace Tau
         // 索引に無い番号は、ここから取り出す。
         void IndexObjectStreams()
         {
+            // 走査中に offsets が増えることがあるので、キーをコピーする。
+            List<int> all = new(offsets.Keys);
             List<int> streams = new();
-            foreach (int num in offsets.Keys)
+            foreach (int num in all)
             {
                 PdfObject o = GetObject(num);
                 if (o == null || o.Dict == null) continue;
@@ -439,7 +530,7 @@ namespace Tau
             if (rootRef < 0)
             {
                 List<int> all = new(offsets.Keys);
-                foreach (int num in compressed.Keys)
+                foreach (int num in new List<int>(compressed.Keys))
                     if (!all.Contains(num)) all.Add(num);
 
                 foreach (int num in all)
@@ -560,7 +651,8 @@ namespace Tau
                     while (o.StreamStart < text.Length
                         && (text[o.StreamStart] == '\r' || text[o.StreamStart] == '\n'))
                         o.StreamStart++;
-                    o.Length = dict.ContainsKey("Length") ? AsInt(dict["Length"]) : -1;
+                    o.Length = dict.ContainsKey("Length")
+                        ? LengthOf(dict["Length"]) : -1;
                 }
                 return o;
             }
@@ -795,14 +887,35 @@ namespace Tau
             return o.IsNumber ? o.NumberValue : -1;
         }
 
+        // /Length は数値か、数値を指す間接参照。
+        // 参照のまま -1 を返すと、圧縮データの中の "endstream" を
+        // 誤って探してしまうため、ここで解決する。
+        int LengthOf(PdfObject o)
+        {
+            if (o == null) return -1;
+            if (o.IsNumber) return o.NumberValue;
+            if (!o.IsRef) return -1;
+
+            PdfObject resolved = GetObject(o.RefNum);
+            if (resolved == null) return -1;
+            return resolved.IsNumber ? resolved.NumberValue : -1;
+        }
+
         // ---------------- ページの内容ストリーム ----------------
 
         /// <summary>全ページの内容ストリーム(辞書付き)を順に返す。</summary>
         // 1 ページ分の内容ストリームと、そのページのフォント対応。
         public sealed class PageContent
         {
-            public PdfObject Content;
+            // /Contents は 1 つのストリームか、配列(複数)になる。
+            public List<PdfObject> Contents = new();
             public Dictionary<string, FontMap> Fonts = new();
+
+            // 後方互換: 最初のストリーム
+            public PdfObject Content
+            {
+                get { return Contents.Count > 0 ? Contents[0] : null; }
+            }
         }
 
         public IEnumerable<PageContent> Pages()
@@ -832,9 +945,9 @@ namespace Tau
                     if (!o.Dict.ContainsKey("Contents")) continue;
 
                     PageContent pc = new();
-                    pc.Content = Resolve(o.Dict["Contents"]);
+                    pc.Contents = ContentsOf(o.Dict["Contents"]);
                     pc.Fonts = FontsOf(o.Dict, null);
-                    if (pc.Content != null) result.Add(pc);
+                    if (pc.Contents.Count > 0) result.Add(pc);
                 }
             }
             return result;
@@ -844,7 +957,44 @@ namespace Tau
         public IEnumerable<PdfObject> PageContents()
         {
             List<PdfObject> list = new();
-            foreach (PageContent p in Pages()) if (p.Content != null) list.Add(p.Content);
+            foreach (PageContent p in Pages())
+                foreach (PdfObject c in p.Contents)
+                    if (c != null) list.Add(c);
+            return list;
+        }
+
+        // /Contents の値(単体または配列)を、ストリームの一覧にする。
+        List<PdfObject> ContentsOf(PdfObject contents)
+        {
+            List<PdfObject> list = new();
+            if (contents == null) return list;
+
+            if (contents.IsArray && contents.ArrayBody != null)
+            {
+                string body = contents.ArrayBody;
+                int i = 0;
+                while (i < body.Length)
+                {
+                    i = SkipWs(body, i);
+                    if (i >= body.Length) break;
+                    if (!char.IsDigit(body[i])) { i++; continue; }
+
+                    int start = i;
+                    while (i < body.Length && char.IsDigit(body[i])) i++;
+                    int num = ParseInt(body, start, i);
+                    i = SkipWs(body, i);
+                    while (i < body.Length && char.IsDigit(body[i])) i++;
+                    i = SkipWs(body, i);
+                    if (i < body.Length && body[i] == 'R') i++;
+
+                    PdfObject o = GetObject(num);
+                    if (o != null && o.StreamStart > 0) list.Add(o);
+                }
+                return list;
+            }
+
+            PdfObject single = Resolve(contents);
+            if (single != null && single.StreamStart > 0) list.Add(single);
             return list;
         }
 
@@ -1086,7 +1236,7 @@ namespace Tau
             {
                 PageContent pc = new();
                 if (node.Dict.ContainsKey("Contents"))
-                    pc.Content = Resolve(node.Dict["Contents"]);
+                    pc.Contents = ContentsOf(node.Dict["Contents"]);
                 pc.Fonts = FontsOf(node.Dict, res);
                 result.Add(pc);
                 return;
@@ -1198,8 +1348,11 @@ namespace Tau
                 case "RunLengthDecode":
                 case "RL":
                     return RunLength(input);
+                case "LZWDecode":
+                case "LZW":
+                    return Lzw(input, 1);
                 default:
-                    return null;   // LZW / JPX / CCITT などは未対応
+                    return null;   // JPX / CCITT / JBIG2 などは未対応
             }
         }
 
@@ -1275,6 +1428,92 @@ namespace Tau
             return outBytes.ToArray();
         }
 
+        // LZW(TIFF 形式ではなく PDF の LZW)。EarlyChange=1 が既定。
+        static byte[] Lzw(byte[] input, int earlyChange)
+        {
+            List<byte> outBytes = new();
+
+            // 辞書: コード → バイト列。最初は 0..255 の 1 バイト
+            List<byte[]> table = new();
+            for (int i = 0; i < 256; i++) table.Add(new[] { (byte)i });
+            table.Add(Array.Empty<byte>());   // 256 = clear
+            table.Add(Array.Empty<byte>());   // 257 = EOD
+
+            int codeBits = 9;
+            int bitPos = 0;
+            byte[] prev = null;
+
+            while (true)
+            {
+                int code = ReadBits(input, ref bitPos, codeBits);
+                if (code < 0) break;
+
+                if (code == 256)
+                {
+                    // 辞書をリセット
+                    table.Clear();
+                    for (int i = 0; i < 256; i++) table.Add(new[] { (byte)i });
+                    table.Add(Array.Empty<byte>());
+                    table.Add(Array.Empty<byte>());
+                    codeBits = 9;
+                    prev = null;
+                    continue;
+                }
+                if (code == 257) break;   // EOD
+
+                byte[] entry;
+                if (code < table.Count)
+                {
+                    entry = table[code];
+                }
+                else if (prev != null && code == table.Count)
+                {
+                    // KwKwK ケース
+                    entry = new byte[prev.Length + 1];
+                    Array.Copy(prev, entry, prev.Length);
+                    entry[prev.Length] = prev[0];
+                }
+                else
+                {
+                    break;   // 壊れたデータ
+                }
+
+                outBytes.AddRange(entry);
+
+                if (prev != null)
+                {
+                    byte[] add = new byte[prev.Length + 1];
+                    Array.Copy(prev, add, prev.Length);
+                    add[prev.Length] = entry[0];
+                    table.Add(add);
+                }
+                prev = entry;
+
+                // 次のコード幅
+                int next = table.Count + earlyChange;
+                if (next >= 4096) codeBits = 12;
+                else if (next >= 2048) codeBits = 12;
+                else if (next >= 1024) codeBits = 11;
+                else if (next >= 512) codeBits = 10;
+                else codeBits = 9;
+            }
+            return outBytes.ToArray();
+        }
+
+        static int ReadBits(byte[] data, ref int bitPos, int bits)
+        {
+            int value = 0;
+            for (int i = 0; i < bits; i++)
+            {
+                int byteIndex = bitPos >> 3;
+                if (byteIndex >= data.Length) return -1;
+                int bitIndex = 7 - (bitPos & 7);
+                value = (value << 1) | ((data[byteIndex] >> bitIndex) & 1);
+                bitPos++;
+            }
+            return value;
+        }
+
         static byte[] RunLength(byte[] input)
         {
             List<byte> outBytes = new();
@@ -1302,6 +1541,11 @@ namespace Tau
         }
 
         // /Filter の一覧(配列なら順番どおり)
+        public List<string> FiltersOf(PdfObject o)
+        {
+            return FilterNames(o);
+        }
+
         static List<string> FilterNames(PdfObject o)
         {
             List<string> list = new();
@@ -1410,6 +1654,11 @@ namespace Tau
             // 現在のフォント(Tf で切り替わる)
             FontMap currentFont = null;
 
+            // marked content の ActualText。ActualText があった範囲は、
+            // 中の描画文字を捨てて ActualText だけを使う。
+            List<string> markedStack = new();
+            int skipDepth = 0;
+
             int i = 0;
             while (i < content.Length)
             {
@@ -1434,7 +1683,8 @@ namespace Tau
                 {
                     if (i + 1 < content.Length && content[i + 1] == '<')
                     {
-                        // 辞書は読み飛ばす
+                        // 辞書。BDC の /ActualText を読むため、中身を保持する。
+                        int dictStart = i;
                         i += 2;
                         int depth = 1;
                         while (i < content.Length - 1 && depth > 0)
@@ -1443,6 +1693,7 @@ namespace Tau
                             else if (content[i] == '>' && content[i + 1] == '>') { depth--; i += 2; }
                             else i++;
                         }
+                        operands.Add(content.Substring(dictStart, i - dictStart));
                         continue;
                     }
                     string hex = ReadHex(content, ref i, currentFont);
@@ -1514,14 +1765,14 @@ namespace Tau
                 switch (op)
                 {
                     case "Tj":
-                        if (operands.Count > 0)
+                        if (skipDepth == 0 && operands.Count > 0)
                         {
                             sb.Append(operands[operands.Count - 1]);
                         }
                         operands.Clear();
                         break;
                     case "TJ":
-                        if (operands.Count > 0)
+                        if (skipDepth == 0 && operands.Count > 0)
                         {
                             sb.Append(operands[operands.Count - 1]);
                         }
@@ -1539,6 +1790,38 @@ namespace Tau
                         break;
                     case "ET":
                         NewLine(sb);
+                        operands.Clear();
+                        break;
+                    case "BDC":
+                    case "BMC":
+                        {
+                            // marked content。ActualText があれば、
+                            // 中の描画の代わりにその文字を使う。
+                            string actual = null;
+                            for (int k = 0; k < operands.Count; k++)
+                            {
+                                string o = operands[k];
+                                if (o.Length > 1 && o[0] == '<' && o[1] == '<')
+                                {
+                                    string t = FindActualText(o);
+                                    if (t != null) { actual = t; break; }
+                                }
+                            }
+                            markedStack.Add(actual);
+                            if (actual != null)
+                            {
+                                // この BDC の中の描画文字は捨てる
+                                sb.Append(actual);
+                                skipDepth = markedStack.Count;
+                            }
+                            operands.Clear();
+                            break;
+                        }
+                    case "EMC":
+                        if (markedStack.Count > 0)
+                            markedStack.RemoveAt(markedStack.Count - 1);
+                        // 外側の marked content に戻ったらスキップ解除
+                        if (skipDepth > markedStack.Count) skipDepth = 0;
                         operands.Clear();
                         break;
                     case "Tf":
@@ -1569,6 +1852,89 @@ namespace Tau
             }
 
             return sb.ToString();
+        }
+
+        // "<< ... /ActualText (文字) ... >>" から ActualText を取り出す。
+        // 16 進表記 <...> にも対応する。無ければ null。
+        static string FindActualText(string dict)
+        {
+            int idx = dict.IndexOf("/ActualText", StringComparison.Ordinal);
+            if (idx < 0) return null;
+
+            int i = idx + "/ActualText".Length;
+            while (i < dict.Length && char.IsWhiteSpace(dict[i])) i++;
+            if (i >= dict.Length) return null;
+
+            if (dict[i] == '(')
+            {
+                StringBuilder sb = new();
+                int depth = 0;
+                i++;
+                while (i < dict.Length)
+                {
+                    char c = dict[i];
+                    if (c == '\\')
+                    {
+                        i++;
+                        if (i >= dict.Length) break;
+                        char e = dict[i];
+                        switch (e)
+                        {
+                            case 'n': sb.Append('\n'); break;
+                            case 'r': sb.Append('\r'); break;
+                            case 't': sb.Append('\t'); break;
+                            case '(': sb.Append('('); break;
+                            case ')': sb.Append(')'); break;
+                            case '\\': sb.Append('\\'); break;
+                            default:
+                                if (e >= '0' && e <= '7')
+                                {
+                                    int v = 0, n = 0;
+                                    while (n < 3 && i < dict.Length && dict[i] >= '0' && dict[i] <= '7')
+                                    {
+                                        v = v * 8 + (dict[i] - '0');
+                                        i++;
+                                        n++;
+                                    }
+                                    i--;
+                                    sb.Append((char)v);
+                                }
+                                else sb.Append(e);
+                                break;
+                        }
+                        i++;
+                        continue;
+                    }
+                    if (c == '(') { depth++; sb.Append(c); i++; continue; }
+                    if (c == ')')
+                    {
+                        i++;
+                        if (depth == 0) break;
+                        depth--;
+                        sb.Append(c);
+                        continue;
+                    }
+                    sb.Append(c);
+                    i++;
+                }
+                return sb.ToString();
+            }
+
+            if (dict[i] == '<')
+            {
+                StringBuilder hex = new();
+                i++;
+                while (i < dict.Length && dict[i] != '>')
+                {
+                    if (!char.IsWhiteSpace(dict[i])) hex.Append(dict[i]);
+                    i++;
+                }
+                byte[] b = HexToBytes(hex.ToString());
+                if (b.Length >= 2) return Encoding.BigEndianUnicode.GetString(b);
+                return Encoding.Latin1.GetString(b);
+            }
+
+            return null;
         }
 
         // 数値トークンか(12, -3.5, .5 など)

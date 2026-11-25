@@ -21,6 +21,10 @@ namespace Tau.Tests
 
         public PdfStructureTests()
         {
+            // read_document は pdf2text を別プロセスで呼ぶ。
+            // TauRunner が TAU_HELPERS_DIR を設定する。
+            runner = new TauRunner();
+
             dir = Path.Combine(Path.GetTempPath(),
                 "tau-pdfstruct-" + Guid.NewGuid().ToString("N").Substring(0, 8));
             Directory.CreateDirectory(dir);
@@ -28,14 +32,35 @@ namespace Tau.Tests
 
         public void Dispose()
         {
+            runner.Dispose();
             try { Directory.Delete(dir, true); } catch { }
         }
 
         static byte[] Enc(string s) { return Encoding.Latin1.GetBytes(s); }
 
+        static TauRunner runner;
+
         static string Read(string path, out string error)
         {
-            return PdfReader.ReadText(path, out error);
+            Dictionary<string, object> args = new() { ["path"] = path };
+            string json = ToolExecutor.Execute("read_document", Json.ToString(args), new Config(""));
+            Dictionary<string, object> d = Json.Parse(json) as Dictionary<string, object>;
+
+            if (d.ContainsKey("ok") && Json.AsString(d["ok"]) == "true")
+            {
+                error = null;
+                return Json.AsString(d["content"]);
+            }
+            error = d.ContainsKey("error") ? Json.AsString(d["error"]) : "(no error message)";
+            return null;
+        }
+
+        static int Pages(string path)
+        {
+            Dictionary<string, object> args = new() { ["path"] = path };
+            string json = ToolExecutor.Execute("read_document", Json.ToString(args), new Config(""));
+            Dictionary<string, object> d = Json.Parse(json) as Dictionary<string, object>;
+            return d.ContainsKey("pages") ? Json.AsInt(d["pages"]) : 0;
         }
 
         static string Zlib(byte[] raw)
@@ -148,7 +173,7 @@ namespace Tau.Tests
             string text = Read(path, out string error);
             Assert.Null(error);
             Assert.Equal("Hello from ObjStm", text);
-            Assert.Equal(1, PdfReader.CountPages(path));
+            Assert.Equal(1, Pages(path));
         }
 
         // xref ストリームのエントリを作る。
@@ -268,6 +293,255 @@ namespace Tau.Tests
                 i += n;
             }
             return sb.ToString();
+        }
+
+        [Fact]
+        public void IndirectLengthAndMultipleContentsAreRead()
+        {
+            // PDF 1.7 でよくある形:
+            //  - /Length が間接参照 (9 0 R)
+            //  - /Contents が配列 ([4 0 R 6 0 R])
+            //  - ObjStm + XRef ストリーム
+            byte[] c1 = Enc("BT /F1 12 Tf 72 720 Td (First stream) Tj ET");
+            byte[] c2 = Enc("BT /F1 12 Tf 72 702 Td (Second stream) Tj ET");
+            string z1 = Zlib(c1);
+            string z2 = Zlib(c2);
+
+            List<KeyValuePair<int, string>> inner = new()
+            {
+                new(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+                new(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+                new(3, "<< /Type /Page /Parent 2 0 R /Contents [4 0 R 6 0 R] "
+                       + "/Resources << /Font << /F1 8 0 R >> >> >>"),
+                new(8, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
+                new(9, z1.Length.ToString()),
+                new(10, z2.Length.ToString()),
+            };
+
+            StringBuilder header = new();
+            StringBuilder body = new();
+            foreach (KeyValuePair<int, string> kv in inner)
+            {
+                header.Append(kv.Key).Append(' ').Append(body.Length).Append(' ');
+                body.Append(kv.Value).Append(' ');
+            }
+            string objStmZ = Zlib(Enc(header.ToString() + body.ToString()));
+
+            MemoryStream ms = new();
+            byte[] pdfHeader = Enc("%PDF-1.7\n");
+            ms.Write(pdfHeader, 0, pdfHeader.Length);
+
+            int off4 = (int)ms.Length;
+            string o4 = "4 0 obj\n<< /Length 9 0 R /Filter /FlateDecode >>\nstream\n"
+                + z1 + "\nendstream\nendobj\n";
+            ms.Write(Enc(o4), 0, Enc(o4).Length);
+
+            int off6 = (int)ms.Length;
+            string o6 = "6 0 obj\n<< /Length 10 0 R /Filter /FlateDecode >>\nstream\n"
+                + z2 + "\nendstream\nendobj\n";
+            ms.Write(Enc(o6), 0, Enc(o6).Length);
+
+            int off7 = (int)ms.Length;
+            string o7 = "7 0 obj\n<< /Type /ObjStm /N " + inner.Count
+                + " /First " + header.Length + " /Length " + objStmZ.Length
+                + " /Filter /FlateDecode >>\nstream\n" + objStmZ
+                + "\nendstream\nendobj\n";
+            ms.Write(Enc(o7), 0, Enc(o7).Length);
+
+            int off11 = (int)ms.Length;
+            byte[] entries = XrefEntries17(off4, off6, off7, off11, inner.Count);
+            string xr = Zlib(entries);
+            string o11 = "11 0 obj\n<< /Type /XRef /Size 12 /W [1 4 2] /Root 1 0 R "
+                + "/Length " + xr.Length + " /Filter /FlateDecode >>\nstream\n" + xr
+                + "\nendstream\nendobj\n";
+            ms.Write(Enc(o11), 0, Enc(o11).Length);
+
+            string tail = "startxref\n" + off11 + "\n%%EOF\n";
+            ms.Write(Enc(tail), 0, Enc(tail).Length);
+
+            string path = Path.Combine(dir, "pdf17.pdf");
+            File.WriteAllBytes(path, ms.ToArray());
+
+            string text = Read(path, out string error);
+            Assert.Null(error);
+            Assert.Contains("First stream", text);
+            Assert.Contains("Second stream", text);
+            Assert.Equal(1, Pages(path));
+        }
+
+        static byte[] XrefEntries17(int off4, int off6, int off7, int off11, int innerCount)
+        {
+            List<byte> b = new();
+            b.Add(0); AddU32(b, 0); AddU16(b, 65535);
+            for (int i = 0; i < innerCount; i++) { b.Add(2); AddU32(b, 7); AddU16(b, i); }
+            b.Add(1); AddU32(b, off4); AddU16(b, 0);
+            b.Add(1); AddU32(b, off6); AddU16(b, 0);
+            b.Add(1); AddU32(b, off7); AddU16(b, 0);
+            b.Add(1); AddU32(b, off11); AddU16(b, 0);
+            return b.ToArray();
+        }
+
+        [Fact]
+        public void XrefEntriesSurviveScanningOrder()
+        {
+            // xref ストリームの読み取りで索引が増えても、
+            // 反復中の変更で例外にならないこと。
+            byte[] content = Enc("BT /F1 12 Tf 72 720 Td (order safe) Tj ET");
+            string contentZ = Zlib(content);
+
+            List<KeyValuePair<int, string>> inner = new()
+            {
+                new(1, "<< /Type /Catalog /Pages 2 0 R >>"),
+                new(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+                new(3, "<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>"),
+            };
+
+            StringBuilder header = new();
+            StringBuilder body = new();
+            foreach (KeyValuePair<int, string> kv in inner)
+            {
+                header.Append(kv.Key).Append(' ').Append(body.Length).Append(' ');
+                body.Append(kv.Value).Append(' ');
+            }
+            string objStmZ = Zlib(Enc(header.ToString() + body.ToString()));
+
+            MemoryStream ms = new();
+            byte[] pdfHeader = Enc("%PDF-1.7\n");
+            ms.Write(pdfHeader, 0, pdfHeader.Length);
+
+            int off4 = (int)ms.Length;
+            string o4 = "4 0 obj\n<< /Length " + contentZ.Length
+                + " /Filter /FlateDecode >>\nstream\n" + contentZ + "\nendstream\nendobj\n";
+            ms.Write(Enc(o4), 0, Enc(o4).Length);
+
+            int off7 = (int)ms.Length;
+            string o7 = "7 0 obj\n<< /Type /ObjStm /N " + inner.Count
+                + " /First " + header.Length + " /Length " + objStmZ.Length
+                + " /Filter /FlateDecode >>\nstream\n" + objStmZ + "\nendstream\nendobj\n";
+            ms.Write(Enc(o7), 0, Enc(o7).Length);
+
+            int off11 = (int)ms.Length;
+            byte[] entries = XrefEntries17(off4, off7, off7, off11, inner.Count);
+            string xr = Zlib(entries);
+
+            string o11 = "11 0 obj\n<< /Type /XRef /Size 12 /W [1 4 2] /Root 1 0 R "
+                + "/Length " + xr.Length + " /Filter /FlateDecode >>\nstream\n" + xr
+                + "\nendstream\nendobj\n";
+            ms.Write(Enc(o11), 0, Enc(o11).Length);
+
+            string tail = "startxref\n" + off11 + "\n%%EOF\n";
+            ms.Write(Enc(tail), 0, Enc(tail).Length);
+
+            string path = Path.Combine(dir, "order.pdf");
+            File.WriteAllBytes(path, ms.ToArray());
+
+            string text = Read(path, out string error);
+            Assert.True(error == null, error);
+            Assert.Contains("order safe", text);
+        }
+
+        [Fact]
+        public void ActualTextReplacesTheDrawnGlyphs()
+        {
+            // Tagged PDF。見た目はグリフ番号でも、ActualText に本当の文字がある。
+            byte[] content = Enc(
+                "BT /F1 12 Tf 72 720 Td "
+                + "/Span << /ActualText <FEFF65E5672C> >> BDC "
+                + "(garbage glyphs) Tj EMC "
+                + "(visible) Tj ET");
+            string contentZ = Zlib(content);
+
+            string path = WriteSimplePdf(new List<byte[]>
+            {
+                Enc("<< /Type /Catalog /Pages 2 0 R >>"),
+                Enc("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+                Enc("<< /Type /Page /Parent 2 0 R /Contents 4 0 R "
+                    + "/Resources << /Font << /F1 5 0 R >> >> >>"),
+                Enc("<< /Length " + contentZ.Length + " /Filter /FlateDecode >>\nstream\n"
+                    + contentZ + "\nendstream"),
+                Enc("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"),
+            }, 1, 6);
+
+            string text = Read(path, out string error);
+            Assert.Null(error);
+            Assert.Contains("日本", text);
+            Assert.DoesNotContain("garbage glyphs", text);
+            Assert.Contains("visible", text);
+        }
+
+        [Fact]
+        public void LzwDecodeIsSupported()
+        {
+            // 小さな LZW 圧縮データを作る。
+            // "BT /F1 12 Tf 72 720 Td (LZW text) Tj ET"
+            byte[] plain = Enc("BT /F1 12 Tf 72 720 Td (LZW text) Tj ET");
+            byte[] lzw = LzwEncode(plain);
+
+            string path = WriteSimplePdf(new List<byte[]>
+            {
+                Enc("<< /Type /Catalog /Pages 2 0 R >>"),
+                Enc("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+                Enc("<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>"),
+                Enc("<< /Length " + lzw.Length + " /Filter /LZWDecode >>\nstream\n")
+                    .Concat(lzw).Concat(Enc("\nendstream")).ToArray(),
+            }, 1, 5);
+
+            string text = Read(path, out string error);
+            Assert.Null(error);
+            Assert.Equal("LZW text", text);
+        }
+
+        // PDF の LZW(EarlyChange=1)で符号化する。
+        static byte[] LzwEncode(byte[] data)
+        {
+            List<byte> outBytes = new();
+            List<int> codes = new();
+
+            Dictionary<string, int> table = new();
+            for (int i = 0; i < 256; i++) table[((char)i).ToString()] = i;
+            int next = 258;
+
+            codes.Add(256);   // clear
+
+            string w = "";
+            foreach (byte b in data)
+            {
+                string wc = w + (char)b;
+                if (table.ContainsKey(wc))
+                {
+                    w = wc;
+                }
+                else
+                {
+                    codes.Add(table[w]);
+                    table[wc] = next++;
+                    w = ((char)b).ToString();
+                }
+            }
+            if (w.Length > 0) codes.Add(table[w]);
+            codes.Add(257);   // EOD
+
+            // 9 ビットで書き出す(小さなデータなので幅は変わらない)
+            int bitPos = 0;
+            int cur = 0;
+            int bits = 0;
+            foreach (int code in codes)
+            {
+                for (int k = 8; k >= 0; k--)
+                {
+                    cur = (cur << 1) | ((code >> k) & 1);
+                    bits++;
+                    if (bits == 8)
+                    {
+                        outBytes.Add((byte)cur);
+                        cur = 0;
+                        bits = 0;
+                    }
+                }
+                bitPos++;
+            }
+            if (bits > 0) outBytes.Add((byte)(cur << (8 - bits)));
+            return outBytes.ToArray();
         }
 
         // ---------------- CID フォント + ToUnicode ----------------

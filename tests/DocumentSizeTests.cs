@@ -13,9 +13,13 @@ namespace Tau.Tests
     public class DocumentSizeTests : IDisposable
     {
         readonly string dir;
+        readonly TauRunner runner;
 
         public DocumentSizeTests()
         {
+            // read_document は pdf2text などを別プロセスで呼ぶ。
+            runner = new TauRunner();
+
             dir = Path.Combine(Path.GetTempPath(),
                 "tau-docsize-test-" + Guid.NewGuid().ToString("N").Substring(0, 8));
             Directory.CreateDirectory(dir);
@@ -23,6 +27,7 @@ namespace Tau.Tests
 
         public void Dispose()
         {
+            runner.Dispose();
             try { Directory.Delete(dir, true); } catch { }
         }
 

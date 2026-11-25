@@ -20,15 +20,13 @@
     <!-- 単一ファイルで配布する -->
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
-    <RuntimeIdentifiers>win-x86;win-x64</RuntimeIdentifiers>
 
     <!--
-      テストはフレームワーク依存でビルドする (SelfContained=false)。
-      Windows の SDK では RID を指定したまま SelfContained=false でビルド
-      すると NuGet が "Value cannot be null (path1)" で失敗するため、
-      その場合は RID を空にする。
+      RuntimeIdentifiers は publish するときだけ指定する(build.bat / CI)。
+      既定で入れておくと、テストが ProjectReference で参照したときの
+      restore が RID 付きになり、"Assets file ... doesn't have a target for
+      net10.0/linux-musl-x64" で失敗する。
     -->
-    <RuntimeIdentifiers Condition="'$(SelfContained)' == 'false'"></RuntimeIdentifiers>
 
     <!-- 圧縮してサイズを抑える -->
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
@@ -44,7 +42,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="src/**/*.cs" />
+    <!-- src/pdf2text/ などは別の exe なので除外する -->
+    <Compile Include="src/**/*.cs"
+             Exclude="src/pdf2text/**/*.cs;src/word2text/**/*.cs;src/excel2text/**/*.cs" />
     <!-- web 画面を実行ファイルに埋め込む(単一ファイル配布のため) -->
     <EmbeddedResource Include="src/www/index.html" />
   </ItemGroup>
