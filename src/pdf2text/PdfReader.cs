@@ -58,8 +58,14 @@ namespace Pdf2Text
                 StringBuilder sb = new();
                 int pages = 0;
 
+                bool undecodable = false;
+
                 foreach (PdfDocument.PageContent page in doc.Pages())
                 {
+                    // 文字の対応表が無いフォントがあれば、復元できない。
+                    foreach (KeyValuePair<string, FontMap> f in page.Fonts)
+                        if (f.Value != null && f.Value.Undecodable) undecodable = true;
+
                     // 1 ページに複数の内容ストリームがある場合は連結して読む。
                     StringBuilder pageText = new();
                     foreach (PdfObject content in page.Contents)
@@ -86,15 +92,28 @@ namespace Pdf2Text
 
                 string result = Normalize(sb.ToString());
 
+                // 内容ストリームに文字が無い場合は、フォームの値を読む。
+                // (入力欄だけの PDF)
+                if (!HasReadableText(result) && !doc.HadContent)
+                {
+                    List<string> fields = doc.FormFieldTexts();
+                    if (fields.Count > 0)
+                    {
+                        StringBuilder fb = new();
+                        foreach (string v in fields) fb.Append(v).Append('\n');
+                        result = Normalize(fb.ToString());
+                    }
+                }
+
                 // 制御文字だけ(グリフ番号がそのまま出た場合)は意味のある
                 // テキストではない。読み取れなかったものとして扱う。
-                if (!HasReadableText(result))
+                if (!HasReadableText(result) || undecodable)
                 {
-                    error = doc.HadContent
+                    error = (doc.HadContent || undecodable)
                         ? "the PDF has text, but it could not be decoded "
-                          + "(the font lacks a ToUnicode map). Try converting it "
-                          + "to text with another tool, or save it as an image "
-                          + "and use OCR."
+                          + "(the font has no ToUnicode map and no embedded cmap). "
+                          + "Try converting it to text with another tool, or save "
+                          + "it as an image and use OCR."
                         : "no text could be extracted. This PDF may be a scan "
                           + "(image only) and needs OCR.";
                     return null;
@@ -998,6 +1017,92 @@ namespace Pdf2Text
             return list;
         }
 
+        // AcroForm のフィールド値を集める。
+        // 内容ストリームに文字が無い PDF(フォームだけ)で使う。
+        public List<string> FormFieldTexts()
+        {
+            List<string> list = new();
+            if (rootRef < 0) return list;
+
+            PdfObject catalog = GetObject(rootRef);
+            if (catalog == null || catalog.Dict == null) return list;
+            if (!catalog.Dict.ContainsKey("AcroForm")) return list;
+
+            PdfObject form = Resolve(catalog.Dict["AcroForm"]);
+            if (form == null || form.Dict == null) return list;
+            if (!form.Dict.ContainsKey("Fields")) return list;
+
+            PdfObject fields = Resolve(form.Dict["Fields"]);
+            if (fields == null || !fields.IsArray || fields.ArrayBody == null) return list;
+
+            // フィールドは入れ子になる。参照を順に辿る。
+            List<int> refs = new();
+            string body = fields.ArrayBody;
+            int i = 0;
+            while (i < body.Length)
+            {
+                i = SkipWs(body, i);
+                if (i >= body.Length) break;
+                if (!char.IsDigit(body[i])) { i++; continue; }
+                int start = i;
+                while (i < body.Length && char.IsDigit(body[i])) i++;
+                refs.Add(ParseInt(body, start, i));
+                i = SkipWs(body, i);
+                while (i < body.Length && char.IsDigit(body[i])) i++;
+                i = SkipWs(body, i);
+                if (i < body.Length && body[i] == 'R') i++;
+            }
+
+            HashSet<int> seen = new();
+            foreach (int num in refs) CollectFieldValues(num, list, seen);
+            return list;
+        }
+
+        void CollectFieldValues(int num, List<string> list, HashSet<int> seen)
+        {
+            if (num < 0 || seen.Contains(num)) return;
+            seen.Add(num);
+
+            PdfObject f = GetObject(num);
+            if (f == null || f.Dict == null) return;
+
+            // /V が値。文字列なら文字、名前なら名前。
+            if (f.Dict.ContainsKey("V"))
+            {
+                PdfObject v = f.Dict["V"];
+                if (v != null && v.IsString && v.StringValue != null
+                    && v.StringValue.Trim().Length > 0)
+                    list.Add(v.StringValue);
+                else if (v != null && v.IsName && v.NameValue != null)
+                    list.Add(v.NameValue);
+            }
+
+            // 入れ子の /Kids
+            if (f.Dict.ContainsKey("Kids"))
+            {
+                PdfObject kids = Resolve(f.Dict["Kids"]);
+                if (kids != null && kids.IsArray && kids.ArrayBody != null)
+                {
+                    string body = kids.ArrayBody;
+                    int i = 0;
+                    while (i < body.Length)
+                    {
+                        i = SkipWs(body, i);
+                        if (i >= body.Length) break;
+                        if (!char.IsDigit(body[i])) { i++; continue; }
+                        int start = i;
+                        while (i < body.Length && char.IsDigit(body[i])) i++;
+                        int child = ParseInt(body, start, i);
+                        i = SkipWs(body, i);
+                        while (i < body.Length && char.IsDigit(body[i])) i++;
+                        i = SkipWs(body, i);
+                        if (i < body.Length && body[i] == 'R') i++;
+                        CollectFieldValues(child, list, seen);
+                    }
+                }
+            }
+        }
+
         // ページの /Resources からフォント対応を取り出す。
         // 親(Pages ノード)の Resources を継承する。
         Dictionary<string, FontMap> FontsOf(Dictionary<string, PdfObject> pageDict,
@@ -1043,15 +1148,366 @@ namespace Pdf2Text
                     fm.TwoByte = true;
             }
 
-            if (!fontObj.Dict.ContainsKey("ToUnicode")) return fm;
+            // /Encoding の /Differences でグリフ名が指定されている場合。
+            // ToUnicode が無くても、グリフ名から文字が分かる。
+            if (fontObj.Dict.ContainsKey("Encoding"))
+            {
+                PdfObject enc = Resolve(fontObj.Dict["Encoding"]);
+                if (enc != null && enc.Dict != null && enc.Dict.ContainsKey("Differences"))
+                {
+                    PdfObject diffs = enc.Dict["Differences"];
+                    if (diffs != null && diffs.IsArray && diffs.ArrayBody != null)
+                        ParseDifferences(diffs.ArrayBody, fm);
+                }
+            }
 
-            PdfObject tu = Resolve(fontObj.Dict["ToUnicode"]);
-            if (tu == null) return fm;
-            string cmap = DecodeStream(tu);
-            if (cmap == null) return fm;
+            if (fontObj.Dict.ContainsKey("ToUnicode"))
+            {
+                PdfObject tu = Resolve(fontObj.Dict["ToUnicode"]);
+                if (tu != null)
+                {
+                    string cmap = DecodeStream(tu);
+                    if (cmap != null) ParseToUnicode(cmap, fm);
+                }
+            }
 
-            ParseToUnicode(cmap, fm);
+            // ToUnicode が無い場合、埋め込み TrueType (FontFile2) の cmap から
+            // グリフ番号 → Unicode を逆引きする。これで Identity-H/V の
+            // CID フォントでも文字が取れることがある。
+            if (!fm.HasMap && fm.TwoByte) fm.Undecodable = true;
+
+            if (!fm.HasMap && fontObj.Dict.ContainsKey("DescendantFonts"))
+            {
+                PdfObject df = Resolve(fontObj.Dict["DescendantFonts"]);
+                if (df != null && df.IsArray && df.ArrayBody != null)
+                {
+                    int num = FirstRefIn(df.ArrayBody);
+                    PdfObject cidFont = num >= 0 ? GetObject(num) : null;
+                    if (cidFont != null && cidFont.Dict != null)
+                        ReadEmbeddedCmap(cidFont, fm);
+                }
+            }
+
             return fm;
+        }
+
+        static int FirstRefIn(string body)
+        {
+            int i = SkipWs(body, 0);
+            int start = i;
+            while (i < body.Length && char.IsDigit(body[i])) i++;
+            if (i == start) return -1;
+            return ParseInt(body, start, i);
+        }
+
+        // 埋め込み TrueType の cmap テーブルを読み、
+        // グリフ番号 → Unicode の対応を作る。
+        void ReadEmbeddedCmap(PdfObject cidFont, FontMap fm)
+        {
+            if (!cidFont.Dict.ContainsKey("FontDescriptor")) return;
+            PdfObject fd = Resolve(cidFont.Dict["FontDescriptor"]);
+            if (fd == null || fd.Dict == null || !fd.Dict.ContainsKey("FontFile2")) return;
+
+            PdfObject ff = Resolve(fd.Dict["FontFile2"]);
+            if (ff == null) return;
+            string raw = DecodeStream(ff);
+            if (raw == null) return;
+
+            byte[] ttf = Encoding.Latin1.GetBytes(raw);
+            Dictionary<int, int> glyphToUnicode = TrueTypeCmap(ttf);
+            if (glyphToUnicode == null || glyphToUnicode.Count == 0) return;
+
+            foreach (KeyValuePair<int, int> kv in glyphToUnicode)
+            {
+                int cp = kv.Value;
+                if (cp < 0) continue;
+                if (cp >= 0xD800 && cp <= 0xDFFF) continue;
+                fm.Map[kv.Key] = ((char)cp).ToString();
+            }
+            if (fm.HasMap) fm.Undecodable = false;
+        }
+
+        // TrueType の cmap を読み、グリフ番号 → Unicode を返す。
+        // format 4 (BMP) と format 12 (UCS-4) に対応する。
+        static Dictionary<int, int> TrueTypeCmap(byte[] ttf)
+        {
+            try
+            {
+                if (ttf.Length < 12) return null;
+                int numTables = (ttf[4] << 8) | ttf[5];
+                int cmapOffset = -1;
+
+                for (int i = 0; i < numTables; i++)
+                {
+                    int rec = 12 + i * 16;
+                    if (rec + 16 > ttf.Length) break;
+                    uint tag = ((uint)ttf[rec] << 24) | ((uint)ttf[rec + 1] << 16)
+                        | ((uint)ttf[rec + 2] << 8) | ttf[rec + 3];
+                    // 'cmap'
+                    if (tag == 0x636D6170)
+                    {
+                        cmapOffset = (ttf[rec + 8] << 24) | (ttf[rec + 9] << 16)
+                            | (ttf[rec + 10] << 8) | ttf[rec + 11];
+                        break;
+                    }
+                }
+                if (cmapOffset < 0 || cmapOffset + 4 > ttf.Length) return null;
+
+                int numSub = (ttf[cmapOffset + 2] << 8) | ttf[cmapOffset + 3];
+                Dictionary<int, int> result = new();
+
+                for (int i = 0; i < numSub; i++)
+                {
+                    int rec = cmapOffset + 4 + i * 8;
+                    if (rec + 8 > ttf.Length) break;
+                    int platform = (ttf[rec] << 8) | ttf[rec + 1];
+                    int encoding = (ttf[rec + 2] << 8) | ttf[rec + 3];
+                    int offset = (ttf[rec + 4] << 24) | (ttf[rec + 5] << 16)
+                        | (ttf[rec + 6] << 8) | ttf[rec + 7];
+                    int sub = cmapOffset + offset;
+                    if (sub + 2 > ttf.Length) continue;
+
+                    int format = (ttf[sub] << 8) | ttf[sub + 1];
+
+                    // Unicode のサブテーブルだけを使う
+                    if (!(platform == 0 || (platform == 3 && (encoding == 1 || encoding == 10))))
+                        continue;
+
+                    if (format == 4) CmapFormat4(ttf, sub, result);
+                    else if (format == 12) CmapFormat12(ttf, sub, result);
+                }
+                return result;
+            }
+            catch { return null; }
+        }
+
+        static void CmapFormat4(byte[] t, int sub, Dictionary<int, int> result)
+        {
+            int segX2 = U16(t, sub + 6);
+            int segs = segX2 / 2;
+
+            int endCodes = sub + 14;
+            int startCodes = endCodes + segX2 + 2;      // reservedPad
+            int idDelta = startCodes + segX2;
+            int idRangeOffset = idDelta + segX2;
+
+            for (int i = 0; i < segs; i++)
+            {
+                int end = U16(t, endCodes + i * 2);
+                int start = U16(t, startCodes + i * 2);
+                if (start > end) continue;
+                if (start == 0xFFFF && end == 0xFFFF) continue;
+
+                int delta = S16(t, idDelta + i * 2);
+                int rangeOff = U16(t, idRangeOffset + i * 2);
+
+                for (int c = start; c <= end && c - start < 65536; c++)
+                {
+                    int glyph;
+                    if (rangeOff == 0)
+                    {
+                        glyph = (c + delta) & 0xFFFF;
+                    }
+                    else
+                    {
+                        int addr = idRangeOffset + i * 2 + rangeOff + (c - start) * 2;
+                        if (addr + 2 > t.Length) continue;
+                        glyph = U16(t, addr);
+                        if (glyph != 0) glyph = (glyph + delta) & 0xFFFF;
+                    }
+                    if (glyph == 0) continue;
+
+                    // 逆引き。同じグリフに複数の文字が対応する場合は最初を優先。
+                    if (!result.ContainsKey(glyph)) result[glyph] = c;
+                }
+            }
+        }
+
+        static void CmapFormat12(byte[] t, int sub, Dictionary<int, int> result)
+        {
+            uint groups = U32(t, sub + 12);
+            if (groups > 100000) return;
+
+            for (uint g = 0; g < groups; g++)
+            {
+                int rec = sub + 16 + (int)g * 12;
+                if (rec + 12 > t.Length) break;
+                uint startChar = U32(t, rec);
+                uint endChar = U32(t, rec + 4);
+                uint startGlyph = U32(t, rec + 8);
+
+                for (uint c = startChar; c <= endChar && c - startChar < 65536; c++)
+                {
+                    int glyph = (int)(startGlyph + (c - startChar));
+                    if (!result.ContainsKey(glyph))
+                    {
+                        if (c <= 0x10FFFF && !(c >= 0xD800 && c <= 0xDFFF))
+                            result[glyph] = (int)c;
+                    }
+                }
+            }
+        }
+
+        static int U16(byte[] t, int p)
+        {
+            if (p + 1 >= t.Length) return 0;
+            return (t[p] << 8) | t[p + 1];
+        }
+
+        static int S16(byte[] t, int p)
+        {
+            if (p + 1 >= t.Length) return 0;
+            return (short)((t[p] << 8) | t[p + 1]);
+        }
+
+        static uint U32(byte[] t, int p)
+        {
+            if (p + 3 >= t.Length) return 0;
+            return ((uint)t[p] << 24) | ((uint)t[p + 1] << 16)
+                | ((uint)t[p + 2] << 8) | t[p + 3];
+        }
+
+        // "/Differences [ 24 /breve /caron ... ]" を読む。
+        // 数値が来たら、その番号から順にグリフ名を割り当てる。
+        static void ParseDifferences(string body, FontMap fm)
+        {
+            int i = 0;
+            int code = 0;
+            while (i < body.Length)
+            {
+                i = SkipWs(body, i);
+                if (i >= body.Length) break;
+
+                char c = body[i];
+                if (c == '/')
+                {
+                    int start = ++i;
+                    while (i < body.Length && !IsDelimiterOrWs(body[i])) i++;
+                    string glyph = body.Substring(start, i - start);
+                    string text = GlyphToUnicode(glyph);
+                    if (text != null) fm.Map[code] = text;
+                    code++;
+                    continue;
+                }
+                if (char.IsDigit(c))
+                {
+                    int start = i;
+                    while (i < body.Length && char.IsDigit(body[i])) i++;
+                    int.TryParse(body.AsSpan(start, i - start), out code);
+                    continue;
+                }
+                i++;
+            }
+        }
+
+        // グリフ名 → Unicode。よく使われる名前だけを扱う。
+        // (uniXXXX / uXXXX 形式と、基本ラテン・記号)
+        static string GlyphToUnicode(string glyph)
+        {
+            if (string.IsNullOrEmpty(glyph)) return null;
+
+            // uni3053 のような 4 桁 16 進
+            if (glyph.StartsWith("uni") && glyph.Length >= 7)
+            {
+                string hex = glyph.Substring(3);
+                if (hex.Length >= 4)
+                {
+                    int v = HexToInt(hex.Substring(0, 4));
+                    if (v > 0) return ((char)v).ToString();
+                }
+            }
+            // u3053 のような形式
+            if (glyph.StartsWith("u") && glyph.Length >= 5)
+            {
+                int v = HexToInt(glyph.Substring(1, 4));
+                if (v > 0) return ((char)v).ToString();
+            }
+
+            // 基本ラテン
+            if (glyph.Length == 1) return glyph;
+
+            // よく使われる名前
+            switch (glyph)
+            {
+                case "space": return " ";
+                case "exclam": return "!";
+                case "quotedbl": return "\"";
+                case "numbersign": return "#";
+                case "dollar": return "$";
+                case "percent": return "%";
+                case "ampersand": return "&";
+                case "quotesingle": return "'";
+                case "parenleft": return "(";
+                case "parenright": return ")";
+                case "asterisk": return "*";
+                case "plus": return "+";
+                case "comma": return ",";
+                case "hyphen": return "-";
+                case "period": return ".";
+                case "slash": return "/";
+                case "zero": return "0";
+                case "one": return "1";
+                case "two": return "2";
+                case "three": return "3";
+                case "four": return "4";
+                case "five": return "5";
+                case "six": return "6";
+                case "seven": return "7";
+                case "eight": return "8";
+                case "nine": return "9";
+                case "colon": return ":";
+                case "semicolon": return ";";
+                case "less": return "<";
+                case "equal": return "=";
+                case "greater": return ">";
+                case "question": return "?";
+                case "at": return "@";
+                case "bracketleft": return "[";
+                case "backslash": return "\\";
+                case "bracketright": return "]";
+                case "asciicircum": return "^";
+                case "underscore": return "_";
+                case "grave": return "`";
+                case "braceleft": return "{";
+                case "bar": return "|";
+                case "braceright": return "}";
+                case "asciitilde": return "~";
+                case "breve": return "\u02D8";
+                case "caron": return "\u02C7";
+                case "circumflex": return "\u02C6";
+                case "dotaccent": return "\u02D9";
+                case "hungarumlaut": return "\u02DD";
+                case "ogonek": return "\u02DB";
+                case "ring": return "\u02DA";
+                case "tilde": return "\u02DC";
+                case "endash": return "\u2013";
+                case "emdash": return "\u2014";
+                case "quoteleft": return "\u2018";
+                case "quoteright": return "\u2019";
+                case "quotedblleft": return "\u201C";
+                case "quotedblright": return "\u201D";
+                case "bullet": return "\u2022";
+                case "ellipsis": return "\u2026";
+                case "dagger": return "\u2020";
+                case "daggerdbl": return "\u2021";
+                case "perthousand": return "\u2030";
+                case "guilsinglleft": return "\u2039";
+                case "guilsinglright": return "\u203A";
+                case "fraction": return "\u2044";
+                case "florin": return "\u0192";
+                case "germandbls": return "\u00DF";
+                case "AE": return "\u00C6";
+                case "ae": return "\u00E6";
+                case "OE": return "\u0152";
+                case "oe": return "\u0153";
+                case "Oslash": return "\u00D8";
+                case "oslash": return "\u00F8";
+                case "Lslash": return "\u0141";
+                case "lslash": return "\u0142";
+                case "dotlessi": return "\u0131";
+                default:
+                    return null;
+            }
         }
 
         static void ParseToUnicode(string cmap, FontMap fm)
@@ -1583,6 +2039,9 @@ namespace Pdf2Text
         public bool TwoByte;
 
         public bool HasMap { get { return Map.Count > 0; } }
+
+        // 文字の対応表がまったく無い(グリフ番号しか分からない)
+        public bool Undecodable;
     }
 
     sealed class PdfObject
@@ -2082,7 +2541,17 @@ namespace Pdf2Text
             {
                 for (int k = 0; k < bytes.Length; k++)
                 {
-                    if (font.Map.TryGetValue(bytes[k], out string ch)) sb.Append(ch);
+                    int code = bytes[k];
+                    if (font.Map.TryGetValue(code, out string ch))
+                    {
+                        sb.Append(ch);
+                    }
+                    else
+                    {
+                        // /Differences は一部のコードだけを上書きする。
+                        // 載っていないコードは、元の 1 バイト文字のまま。
+                        if (code >= 0x20) sb.Append((char)code);
+                    }
                 }
             }
             return sb.ToString();

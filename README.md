@@ -871,8 +871,10 @@ PDF は次の形式に対応しています。
 |---|---|
 | 圧縮 | FlateDecode / ASCII85 / ASCIIHex / RunLength / LZW（連鎖も可） |
 | 文書構造 | オブジェクトストリーム（`/ObjStm`）・xref ストリーム（`/XRef`） |
-| フォント | CID フォント（`Identity-H`）+ `ToUnicode` CMap |
+| フォント | CID フォント（`Identity-H`/`Identity-V`）+ `ToUnicode` CMap |
+| フォント（代替） | `/Encoding /Differences` のグリフ名、埋め込み TrueType の `cmap` |
 | タグ付き PDF | `/ActualText` があればその文字を使う |
+| フォーム | `AcroForm` のフィールド値（入力欄だけの PDF） |
 | 暗号化 | 検出して「暗号化されている」と返す（復号はしない） |
 
 読めないときは理由を返します。
@@ -881,7 +883,7 @@ PDF は次の形式に対応しています。
 |---|---|
 | 画像だけ | `This PDF may be a scan (image only) and needs OCR.` |
 | パスワード保護 | `this PDF is encrypted (password protected)` |
-| フォントに `ToUnicode` がない | `the font lacks a ToUnicode map` |
+| フォントに対応表がない | `the font has no ToUnicode map and no embedded cmap` |
 
 - 旧形式の `.doc` / `.xls` / `.ppt` は非対応です。PDF か `.docx` / `.xlsx` で保存し直してください。
 - Excel は既定で各シート先頭 200 行までです。`sheet` でシートを指定できます。
@@ -1197,7 +1199,7 @@ Python は不要です。
 | `tests/HistoryDisplayTests.cs` | 再起動後のツール詳細・旧形式との混在・重複防止・不完全な履歴 |
 
 ```
-Passed!  - Failed: 0, Passed: 503, Skipped: 0, Total: 503
+Passed!  - Failed: 0, Passed: 506, Skipped: 0, Total: 506
 ```
 
 所要時間は約 30 秒です。

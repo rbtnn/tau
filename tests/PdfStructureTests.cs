@@ -544,6 +544,84 @@ namespace Tau.Tests
             return outBytes.ToArray();
         }
 
+        [Fact]
+        public void AcroFormFieldValuesAreRead()
+        {
+            // 内容ストリームは背景の矩形だけで、文字はフォームにある。
+            byte[] content = Enc("q 1 0 0 1 -3 3 cm /CS0 cs 1 scn 10 36 591 729 re f Q");
+            string contentZ = Zlib(content);
+
+            string path = WriteSimplePdf(new List<byte[]>
+            {
+                Enc("<< /Type /Catalog /Pages 2 0 R /AcroForm 5 0 R >>"),
+                Enc("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+                Enc("<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>"),
+                Enc("<< /Length " + contentZ.Length + " /Filter /FlateDecode >>\nstream\n"
+                    + contentZ + "\nendstream"),
+                Enc("<< /Fields [6 0 R] >>"),
+                Enc("<< /T (tx) /V (tx annotation) /FT /Tx >>"),
+            }, 1, 7);
+
+            string text = Read(path, out string error);
+            Assert.Null(error);
+            Assert.Contains("tx annotation", text);
+        }
+
+        [Fact]
+        public void CidFontWithoutAnyMappingIsReported()
+        {
+            // Identity-H で、ToUnicode も埋め込み cmap も無い。
+            // グリフ番号しか分からないので、復元できないと返す。
+            byte[] content = Enc("BT /F1 12 Tf 72 720 Td <034B034D> Tj ET");
+            string contentZ = Zlib(content);
+
+            string path = WriteSimplePdf(new List<byte[]>
+            {
+                Enc("<< /Type /Catalog /Pages 2 0 R >>"),
+                Enc("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+                Enc("<< /Type /Page /Parent 2 0 R /Contents 4 0 R "
+                    + "/Resources << /Font << /F1 5 0 R >> >> >>"),
+                Enc("<< /Length " + contentZ.Length + " /Filter /FlateDecode >>\nstream\n"
+                    + contentZ + "\nendstream"),
+                Enc("<< /Type /Font /Subtype /Type0 /BaseFont /MSGothic "
+                    + "/Encoding /Identity-H /DescendantFonts [6 0 R] >>"),
+                Enc("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /MSGothic "
+                    + "/CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 2 >> >>"),
+            }, 1, 7);
+
+            string text = Read(path, out string error);
+            Assert.Null(text);
+            Assert.Contains("could not be decoded", error);
+            Assert.Contains("ToUnicode", error);
+        }
+
+        [Fact]
+        public void GlyphNamesInDifferencesAreMapped()
+        {
+            // /Encoding の /Differences でグリフ名が指定されている。
+            // ToUnicode は無いが、名前から文字が分かる。
+            byte[] content = Enc("BT /F1 12 Tf 72 720 Td (\x18) Tj (A) Tj ET");
+            string contentZ = Zlib(content);
+
+            string path = WriteSimplePdf(new List<byte[]>
+            {
+                Enc("<< /Type /Catalog /Pages 2 0 R >>"),
+                Enc("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+                Enc("<< /Type /Page /Parent 2 0 R /Contents 4 0 R "
+                    + "/Resources << /Font << /F1 5 0 R >> >> >>"),
+                Enc("<< /Length " + contentZ.Length + " /Filter /FlateDecode >>\nstream\n"
+                    + contentZ + "\nendstream"),
+                Enc("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding 6 0 R >>"),
+                Enc("<< /Type /Encoding /Differences [24 /breve] >>"),
+            }, 1, 7);
+
+            string text = Read(path, out string error);
+            Assert.Null(error);
+            // 24 番は breve (U+02D8)
+            Assert.Contains("\u02D8", text);
+            Assert.Contains("A", text);
+        }
+
         // ---------------- CID フォント + ToUnicode ----------------
 
         [Fact]
