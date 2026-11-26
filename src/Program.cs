@@ -171,6 +171,11 @@ namespace Tau
             // 行編集(Emacs キーバインド)を使えるか判定する。
             LineEditor.Configure(cfg);
 
+            // 既定の文字色/背景色を控えておく。
+            // ANSI の ESC[0m で戻したとき、黒背景+黒文字になっている
+            // コンソールがあり、入力中の文字が見えなくなる。
+            ConsoleUi.SaveDefaultColors();
+
             // Markdown の色付けを、コンソールの色対応に合わせる
             MarkdownRenderer.Configure(ConsoleUi.ColorEnabled);
 

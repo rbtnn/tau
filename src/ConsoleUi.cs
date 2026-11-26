@@ -57,6 +57,49 @@ namespace Tau
             color = DetectColor();
         }
 
+        // ---- 既定の文字色/背景色 ----
+        //
+        // ANSI の ESC[0m は「端末の既定色」に戻す。Windows のコンソールでは
+        // 既定色が黒背景+黒文字になっていることがあり、そのままでは
+        // 何も見えなくなる。起動時の色を控えておき、描画の前に戻す。
+        static bool haveColors;
+        static ConsoleColor defaultFore = ConsoleColor.Gray;
+        static ConsoleColor defaultBack = ConsoleColor.Black;
+
+        /// <summary>今の文字色/背景色を控える(起動時に 1 度だけ呼ぶ)。</summary>
+        public static void SaveDefaultColors()
+        {
+            try
+            {
+                defaultFore = Console.ForegroundColor;
+                defaultBack = Console.BackgroundColor;
+                haveColors = true;
+            }
+            catch { }
+        }
+
+        /// <summary>控えておいた既定色に戻す。控えが無ければ何もしない。</summary>
+        public static void ApplyDefaultColors()
+        {
+            if (!haveColors) return;
+            try
+            {
+                Console.ForegroundColor = defaultFore;
+                Console.BackgroundColor = defaultBack;
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// 既定色が読める組み合わせか。
+        /// 文字色と背景色が同じなら、そのままでは見えない。
+        /// </summary>
+        public static bool DefaultColorsAreReadable()
+        {
+            if (!haveColors) return true;
+            return defaultFore != defaultBack;
+        }
+
         static void Raw(string s)
         {
             Action<string> w = sink;

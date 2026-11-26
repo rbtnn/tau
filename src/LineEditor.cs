@@ -169,13 +169,23 @@ namespace Tau
                 try { return Console.ReadLine(); }
                 catch { return null; }
             }
+
             // 色付きで表示する(幅は見た目と同じなのでプロンプト長で計算)
             ConsoleUi.Accent(prompt);
-            bool cancelled;
-            string result = EditLoop(prompt.Length, out cancelled);
-            if (cancelled) return null;
-            Console.Write("\n");
-            return result;
+
+            EnterRawInput();
+            try
+            {
+                bool cancelled;
+                string result = EditLoop(prompt.Length, out cancelled);
+                if (cancelled) return null;
+                Console.Write("\n");
+                return result;
+            }
+            finally
+            {
+                LeaveRawInput();
+            }
         }
 
         // prompt を表示して 1 行読む。Ctrl-G / Ctrl-D(空行)で null。
@@ -184,11 +194,20 @@ namespace Tau
             if (!interactive()) return ReadLineFallback(prompt);
 
             Console.Write(prompt);
-            bool cancelled;
-            string result = EditLoop(prompt.Length, out cancelled);
-            if (cancelled) return null;
-            Console.Write("\n");
-            return result;
+
+            EnterRawInput();
+            try
+            {
+                bool cancelled;
+                string result = EditLoop(prompt.Length, out cancelled);
+                if (cancelled) return null;
+                Console.Write("\n");
+                return result;
+            }
+            finally
+            {
+                LeaveRawInput();
+            }
         }
 
         // ------------------------------------------------------------------
@@ -231,6 +250,44 @@ namespace Tau
         internal static void EnsureConsoleLineInputPublic() { EnsureConsoleLineInput(); }
 
         static void EnsureConsoleLineInput()
+        {
+            if (!Program.IsWindows()) return;
+            try
+            {
+                IntPtr h = GetStdHandle(STD_INPUT_HANDLE);
+                uint mode;
+                if (!GetConsoleMode(h, out mode)) return;
+                uint want = mode | EnableLineInput | EnableEchoInput;
+                if (want != mode) SetConsoleMode(h, want);
+            }
+            catch { }
+        }
+
+        // 自前の行編集用に、入力を 1 文字ずつ読める状態にする。
+        //
+        // Console.ReadKey() は ENABLE_ECHO_INPUT が有効だと、コンソールが
+        // 入力した文字をエコーし、さらに自前でも描画するため二重になり
+        // 表示が崩れる(文字が見えなくなることがある)。
+        // エコーを切り、行入力も切って 1 文字ずつ受け取る。
+        static void EnterRawInput()
+        {
+            if (!Program.IsWindows()) return;
+            try
+            {
+                IntPtr h = GetStdHandle(STD_INPUT_HANDLE);
+                uint mode;
+                if (!GetConsoleMode(h, out mode)) return;
+
+                // ENABLE_LINE_INPUT と ENABLE_ECHO_INPUT を落とす。
+                // ENABLE_PROCESSED_INPUT は残す(Ctrl-C を扱えるようにする)。
+                uint want = mode & ~(EnableLineInput | EnableEchoInput);
+                if (want != mode) SetConsoleMode(h, want);
+            }
+            catch { }
+        }
+
+        // 通常の入力モードに戻す(行編集が終わったら呼ぶ)。
+        static void LeaveRawInput()
         {
             if (!Program.IsWindows()) return;
             try
@@ -438,40 +495,48 @@ namespace Tau
 
             StringBuilder all = new StringBuilder();
             int lineNo = 0;
-            while (true)
+            EnterRawInput();
+            try
             {
-                lineNo++;
-                Console.Write(lineNo == 1 ? prompt : "");
-                bool cancelled;
-                string line = EditLoop(0, out cancelled);
-                if (cancelled) { r.Cancelled = true; break; }
-                Console.Write("\n");
-
-                int nul = Program.CountNul(line);
-                if (nul > 0)
+                while (true)
                 {
-                    string cleaned = Program.SanitizeInput(line);
-                    if (cleaned.Length == 0)
-                    {
-                        ConsoleUi.Danger("  ⚠ This line became NUL and was lost ("
-                            + line.Length + " characters).\n");
-                        ConsoleUi.Dim("    The console input encoding does not match.\n");
-                        ConsoleUi.Info("input encoding: " + Program.SafeInputEncoding());
-                        r.NulLost = true;
-                        lineNo--;
-                        continue;   // やり直し
-                    }
-                    ConsoleUi.Danger("  ⚠ " + nul
-                        + " character(s) of this line became NUL and were dropped.\n");
-                    line = cleaned;
-                }
+                    lineNo++;
+                    Console.Write(lineNo == 1 ? prompt : "");
+                    bool cancelled;
+                    string line = EditLoop(0, out cancelled);
+                    if (cancelled) { r.Cancelled = true; break; }
+                    Console.Write("\n");
 
-                if (line.Length == 0) break;   // 空行で終了
-                if (all.Length > 0) all.Append('\n');
-                all.Append(line);
+                    int nul = Program.CountNul(line);
+                    if (nul > 0)
+                    {
+                        string cleaned = Program.SanitizeInput(line);
+                        if (cleaned.Length == 0)
+                        {
+                            ConsoleUi.Danger("  ⚠ This line became NUL and was lost ("
+                                + line.Length + " characters).\n");
+                            ConsoleUi.Dim("    The console input encoding does not match.\n");
+                            ConsoleUi.Info("input encoding: " + Program.SafeInputEncoding());
+                            r.NulLost = true;
+                            lineNo--;
+                            continue;   // やり直し
+                        }
+                        ConsoleUi.Danger("  ⚠ " + nul
+                            + " character(s) of this line became NUL and were dropped.\n");
+                        line = cleaned;
+                    }
+
+                    if (line.Length == 0) break;   // 空行で終了
+                    if (all.Length > 0) all.Append('\n');
+                    all.Append(line);
+                }
+                r.Text = all.ToString();
+                return r;
             }
-            r.Text = all.ToString();
-            return r;
+            finally
+            {
+                LeaveRawInput();
+            }
         }
 
         // ---------------- 編集ループ ----------------
@@ -779,6 +844,11 @@ namespace Tau
 
         static void Redraw(string text, int pos, int promptWidth)
         {
+            // 描画の前に既定色へ戻す。
+            // ANSI の ESC[0m は端末の既定色に戻すが、Windows のコンソールでは
+            // 黒背景+黒文字のことがあり、そのままだと入力中の文字が見えない。
+            ConsoleUi.ApplyDefaultColors();
+
             try
             {
                 int width = 0;
