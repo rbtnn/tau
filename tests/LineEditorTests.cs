@@ -94,6 +94,27 @@ namespace Tau.Tests
         // ---------------- 描画文字列 ----------------
 
         [Fact]
+        public void RedrawWithEmptyTextStillShowsThePrompt()
+        {
+            // 入力前でもプロンプトは見えること。
+            // これが無いと、キーを押すまでプロンプトが出ない。
+            string s = LineEditor.BuildRedraw("> ", "", 0, 80, true);
+
+            Assert.Contains("> ", s);
+            Assert.Contains("\u001b[2K", s);
+        }
+
+        [Fact]
+        public void RedrawWithEmptyPromptDrawsOnlyTheText()
+        {
+            // 複数行入力の 2 行目以降はプロンプトを出さない。
+            string s = LineEditor.BuildRedraw("", "abc", 3, 80, true);
+
+            Assert.Contains("abc", s);
+            Assert.DoesNotContain(">", s);
+        }
+
+        [Fact]
         public void RedrawDrawsPromptAndText()
         {
             // 以前はプロンプトを空白で上書きしていたため、

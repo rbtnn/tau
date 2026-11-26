@@ -551,6 +551,10 @@ namespace Tau
             // キルリング(Ctrl-K で切った文字列。Ctrl-Y で貼り付け)
             string killRing = "";
 
+            // 最初にプロンプトを描いておく。
+            // これをしないと、キーを押すまでプロンプトが出ない。
+            Redraw(prompt, "", 0);
+
             while (true)
             {
                 ConsoleKeyInfo k = Console.ReadKey(true);
