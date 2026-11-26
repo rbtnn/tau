@@ -796,12 +796,7 @@ namespace Tau
 
             if (describe)
             {
-                string info;
-                if (kind == "pdf") info = Pdf2Text.PdfReader.Describe(path);
-                else if (kind == "word") info = Word2Text.WordReader.Describe(path);
-                else info = Excel2Text.ExcelReader.Describe(path);
-
-                Console.WriteLine(info);
+                Console.WriteLine(DocumentText.Describe(kind, path));
                 return 0;
             }
 

@@ -853,12 +853,36 @@ Office をインストールしていなくても読めます。COM は使いま
 ```
 tau --pdf2text   report.pdf               テキストを出力
 tau --pdf2text   --json report.pdf        JSON で出力
-tau --pdf2text   --describe report.pdf    構造だけを調べる(原因の切り分け)
+tau --pdf2text   --describe report.pdf    構造とフォントを調べる(原因の切り分け)
 
 tau --word2text  memo.docx
 tau --excel2text --sheet 売上 --rows 50 sales.xlsx
 tau --excel2text --json sales.xlsx
 ```
+
+`--describe` は構造とフォントの構成を出します。復号できない PDF の
+原因を切り分けるのに使います。
+
+```
+tau --pdf2text --describe report.pdf
+size=9858475  version=1.7  objects=950  objstm=872  encrypted=no  pages=268  contents=260  decoded=260  filters=[FlateDecode]
+  fonts=4  undecodable=1
+    x12 Ryumin [Type0] enc=Identity-H order=Japan1 twoByte=yes toUnicode=no differences=no fontFile2=no fontFile3=yes japan1=yes mapped=0
+    x3  Gothic [Type0] enc=Identity-H order=Identity twoByte=yes toUnicode=no differences=no fontFile2=no fontFile3=no japan1=no mapped=0 UNDECODABLE
+```
+
+各行の意味です。
+
+| 項目 | 意味 |
+|---|---|
+| `enc` | `/Encoding`（`Identity-H` なら 2 バイトの CID） |
+| `order` | `/CIDSystemInfo` の `Ordering`（`Japan1` なら標準表で復元できる） |
+| `toUnicode` | `/ToUnicode` があるか（あれば必ず復元できる） |
+| `differences` | `/Encoding /Differences` のグリフ名があるか |
+| `fontFile2` / `fontFile3` | 埋め込みフォント（TrueType / CFF）があるか |
+| `japan1` | Adobe-Japan1 の標準表を使うか |
+| `mapped` | 復元できた文字コードの数 |
+| `UNDECODABLE` | 対応表が無く、文字に戻せない |
 
 引数と出力は `pdf2text.exe` などとまったく同じです。終了コードも同じで、
 成功が 0、読めなかったのが 1、使い方の誤りが 2 です。
@@ -1218,7 +1242,7 @@ Python は不要です。
 | `tests/HistoryDisplayTests.cs` | 再起動後のツール詳細・旧形式との混在・重複防止・不完全な履歴 |
 
 ```
-Passed!  - Failed: 0, Passed: 516, Skipped: 0, Total: 516
+Passed!  - Failed: 0, Passed: 524, Skipped: 0, Total: 524
 ```
 
 所要時間は約 30 秒です。

@@ -187,6 +187,35 @@ namespace Pdf2Text
                 sb.Append("  contents=").Append(streams);
                 sb.Append("  decoded=").Append(decoded);
                 sb.Append("  filters=[").Append(string.Join(",", filterNames)).Append(']');
+
+                // フォントの構成。復号できない原因を切り分けるために出す。
+                // 同じフォントが何度も出るので、名前でまとめる。
+                SortedDictionary<string, int> fonts = new(StringComparer.Ordinal);
+                int undecodable = 0;
+
+                foreach (PdfDocument.PageContent page in doc.Pages())
+                {
+                    foreach (KeyValuePair<string, FontMap> kv in page.Fonts)
+                    {
+                        FontMap fm = kv.Value;
+                        if (fm == null) continue;
+
+                        string line = fm.Describe();
+                        fonts.TryGetValue(line, out int n);
+                        fonts[line] = n + 1;
+                        if (fm.Undecodable) undecodable++;
+                    }
+                }
+
+                sb.Append("\n  fonts=").Append(fonts.Count);
+                sb.Append("  undecodable=").Append(undecodable);
+
+                int shown = 0;
+                foreach (KeyValuePair<string, int> kv in fonts)
+                {
+                    if (shown++ >= 20) { sb.Append("\n  ..."); break; }
+                    sb.Append("\n    x").Append(kv.Value).Append(' ').Append(kv.Key);
+                }
                 return sb.ToString();
             }
             catch (Exception ex)
@@ -1158,6 +1187,18 @@ namespace Pdf2Text
         {
             FontMap fm = new();
 
+            // 診断用の情報を控えておく(--describe で表示する)
+            if (fontObj.Dict.ContainsKey("BaseFont"))
+                fm.BaseFont = fontObj.Dict["BaseFont"].NameValue ?? "";
+            if (fontObj.Dict.ContainsKey("Subtype"))
+                fm.Subtype = fontObj.Dict["Subtype"].NameValue ?? "";
+            if (fontObj.Dict.ContainsKey("Encoding"))
+            {
+                PdfObject e = fontObj.Dict["Encoding"];
+                if (e != null && e.IsName) fm.Encoding = e.NameValue ?? "";
+                else if (e != null && e.Dict != null) fm.Encoding = "(dict)";
+            }
+
             // 2 バイト文字か(Identity-H / Identity-V / Type0)
             if (fontObj.Dict.ContainsKey("Subtype")
                 && fontObj.Dict["Subtype"].NameValue == "Type0")
@@ -1179,12 +1220,16 @@ namespace Pdf2Text
                 {
                     PdfObject diffs = enc.Dict["Differences"];
                     if (diffs != null && diffs.IsArray && diffs.ArrayBody != null)
+                    {
+                        fm.HasDifferences = true;
                         ParseDifferences(diffs.ArrayBody, fm);
+                    }
                 }
             }
 
             if (fontObj.Dict.ContainsKey("ToUnicode"))
             {
+                fm.HasToUnicode = true;
                 PdfObject tu = Resolve(fontObj.Dict["ToUnicode"]);
                 if (tu != null)
                 {
@@ -1205,8 +1250,11 @@ namespace Pdf2Text
                 {
                     int num = FirstRefIn(df.ArrayBody);
                     PdfObject cidFont = num >= 0 ? GetObject(num) : null;
-                    if (cidFont != null && cidFont.Dict != null && IsJapan1(cidFont))
-                        fm.UseJapan1 = true;
+                    if (cidFont != null && cidFont.Dict != null)
+                    {
+                        fm.Ordering = OrderingOf(cidFont);
+                        if (IsJapan1(cidFont)) fm.UseJapan1 = true;
+                    }
                 }
             }
 
@@ -1224,7 +1272,21 @@ namespace Pdf2Text
                 }
             }
 
+            fm.MappedCount = fm.Map.Count;
             return fm;
+        }
+
+        // /CIDSystemInfo の Ordering を取り出す(診断用)。
+        string OrderingOf(PdfObject cidFont)
+        {
+            if (!cidFont.Dict.ContainsKey("CIDSystemInfo")) return "";
+            PdfObject info = Resolve(cidFont.Dict["CIDSystemInfo"]);
+            if (info == null || info.Dict == null) return "";
+            if (!info.Dict.ContainsKey("Ordering")) return "";
+
+            PdfObject o = info.Dict["Ordering"];
+            if (o == null) return "";
+            return o.IsString ? o.StringValue : (o.NameValue ?? "");
         }
 
         // /CIDSystemInfo の Ordering が Japan1 か。
@@ -1256,7 +1318,12 @@ namespace Pdf2Text
         {
             if (!cidFont.Dict.ContainsKey("FontDescriptor")) return;
             PdfObject fd = Resolve(cidFont.Dict["FontDescriptor"]);
-            if (fd == null || fd.Dict == null || !fd.Dict.ContainsKey("FontFile2")) return;
+            if (fd == null || fd.Dict == null) return;
+
+            fm.HasFontFile2 = fd.Dict.ContainsKey("FontFile2");
+            fm.HasFontFile3 = fd.Dict.ContainsKey("FontFile3");
+
+            if (!fm.HasFontFile2) return;
 
             PdfObject ff = Resolve(fd.Dict["FontFile2"]);
             if (ff == null) return;
@@ -2219,6 +2286,36 @@ namespace Pdf2Text
 
         // Adobe-Japan1 の標準 CID 対応表で復元する
         public bool UseJapan1;
+
+        // 診断用(--describe で表示する)
+        public string BaseFont = "";
+        public string Subtype = "";
+        public string Encoding = "";
+        public string Ordering = "";
+        public bool HasToUnicode;
+        public bool HasDifferences;
+        public bool HasFontFile2;
+        public bool HasFontFile3;
+        public int MappedCount;
+
+        // 1 行の説明
+        public string Describe()
+        {
+            StringBuilder sb = new();
+            sb.Append(BaseFont.Length > 0 ? BaseFont : "(no BaseFont)");
+            sb.Append(" [").Append(Subtype.Length > 0 ? Subtype : "?").Append(']');
+            if (Encoding.Length > 0) sb.Append(" enc=").Append(Encoding);
+            if (Ordering.Length > 0) sb.Append(" order=").Append(Ordering);
+            sb.Append(" twoByte=").Append(TwoByte ? "yes" : "no");
+            sb.Append(" toUnicode=").Append(HasToUnicode ? "yes" : "no");
+            sb.Append(" differences=").Append(HasDifferences ? "yes" : "no");
+            sb.Append(" fontFile2=").Append(HasFontFile2 ? "yes" : "no");
+            sb.Append(" fontFile3=").Append(HasFontFile3 ? "yes" : "no");
+            sb.Append(" japan1=").Append(UseJapan1 ? "yes" : "no");
+            sb.Append(" mapped=").Append(MappedCount);
+            if (Undecodable) sb.Append(" UNDECODABLE");
+            return sb.ToString();
+        }
     }
 
     sealed class PdfObject

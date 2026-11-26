@@ -13,6 +13,18 @@ namespace Tau
 {
     static class DocumentText
     {
+        // 構造だけを調べる(復号できない原因の切り分け用)。
+        public static string Describe(string kind, string path)
+        {
+            switch (kind)
+            {
+                case "pdf": return Pdf2Text.PdfReader.Describe(path);
+                case "word": return Word2Text.WordReader.Describe(path);
+                case "excel": return Excel2Text.ExcelReader.Describe(path);
+                default: return "unsupported file type: " + kind;
+            }
+        }
+
         // kind は "pdf" / "word" / "excel"。
         public static DocumentJson.Result Read(string kind, string path, string sheet, int maxRows)
         {

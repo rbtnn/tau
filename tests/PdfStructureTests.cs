@@ -55,6 +55,12 @@ namespace Tau.Tests
             return null;
         }
 
+        // --describe 相当。フォントの構成を確かめるのに使う。
+        static string Describe(string path)
+        {
+            return DocumentText.Describe("pdf", path);
+        }
+
         static int Pages(string path)
         {
             Dictionary<string, object> args = new() { ["path"] = path };
@@ -620,6 +626,66 @@ namespace Tau.Tests
             // 24 番は breve (U+02D8)
             Assert.Contains("\u02D8", text);
             Assert.Contains("A", text);
+        }
+
+        // ---------------- --describe のフォント情報 ----------------
+
+        [Fact]
+        public void DescribeShowsFontDetails()
+        {
+            // 復号できない原因を切り分けられるよう、フォントの構成を出す。
+            byte[] content = Enc("BT /F1 12 Tf 72 720 Td <027A> Tj ET");
+            string contentZ = Zlib(content);
+
+            string path = WriteSimplePdf(new List<byte[]>
+            {
+                Enc("<< /Type /Catalog /Pages 2 0 R >>"),
+                Enc("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+                Enc("<< /Type /Page /Parent 2 0 R /Contents 4 0 R "
+                    + "/Resources << /Font << /F1 5 0 R >> >> >>"),
+                Enc("<< /Length " + contentZ.Length + " /Filter /FlateDecode >>\nstream\n"
+                    + contentZ + "\nendstream"),
+                Enc("<< /Type /Font /Subtype /Type0 /BaseFont /Ryumin "
+                    + "/Encoding /Identity-H /DescendantFonts [6 0 R] >>"),
+                Enc("<< /Type /Font /Subtype /CIDFontType0 /BaseFont /Ryumin "
+                    + "/CIDSystemInfo << /Registry (Adobe) /Ordering (Japan1) /Supplement 6 >> >>"),
+            }, 1, 7);
+
+            string info = Describe(path);
+
+            Assert.Contains("fonts=", info);
+            Assert.Contains("Ryumin", info);
+            Assert.Contains("enc=Identity-H", info);
+            Assert.Contains("order=Japan1", info);
+            Assert.Contains("japan1=yes", info);
+            Assert.Contains("undecodable=0", info);
+        }
+
+        [Fact]
+        public void DescribeMarksUndecodableFonts()
+        {
+            byte[] content = Enc("BT /F1 12 Tf 72 720 Td <0001> Tj ET");
+            string contentZ = Zlib(content);
+
+            string path = WriteSimplePdf(new List<byte[]>
+            {
+                Enc("<< /Type /Catalog /Pages 2 0 R >>"),
+                Enc("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+                Enc("<< /Type /Page /Parent 2 0 R /Contents 4 0 R "
+                    + "/Resources << /Font << /F1 5 0 R >> >> >>"),
+                Enc("<< /Length " + contentZ.Length + " /Filter /FlateDecode >>\nstream\n"
+                    + contentZ + "\nendstream"),
+                Enc("<< /Type /Font /Subtype /Type0 /BaseFont /Mystery "
+                    + "/Encoding /Identity-H /DescendantFonts [6 0 R] >>"),
+                Enc("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Mystery "
+                    + "/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> >>"),
+            }, 1, 7);
+
+            string info = Describe(path);
+
+            Assert.Contains("undecodable=1", info);
+            Assert.Contains("UNDECODABLE", info);
+            Assert.Contains("order=Identity", info);
         }
 
         // ---------------- 壊れた PDF で落ちない ----------------
