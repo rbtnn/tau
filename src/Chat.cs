@@ -164,6 +164,12 @@ namespace Tau
                 ctrlCPressed = false;
                 if (LlmClient.DebugOn)
                     ConsoleUi.Dim("  [waiting for input]\n");
+
+                // 入力の前に罫線を引く。応答との境目が分かりやすくなる。
+                // 入力がリダイレクトされている(パイプ)ときは、人が見ないので
+                // 線は引かない。
+                if (!inputRedirected) ConsoleUi.RuleTop();
+
                 waitingForInput = true;
                 try
                 {
@@ -196,6 +202,10 @@ namespace Tau
                     break;
                 }
                 waitingForInput = false;
+
+                // 入力が確定したら、下に罫線を引く。
+                // Ctrl-G で中止したときは引かない(入力をやり直すため)。
+                if (!inputRedirected && line != null) ConsoleUi.RuleBottom();
 
                 if (LlmClient.DebugOn)
                     ConsoleUi.Dim("  [input] length=" + (line == null ? -1 : line.Length)

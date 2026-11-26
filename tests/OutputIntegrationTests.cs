@@ -26,6 +26,79 @@ namespace Tau.Tests
             runner.Dispose();
         }
 
+        // ---------------- 罫線 ----------------
+
+        [Fact]
+        public void RuleTextHasTheRequestedWidth()
+        {
+            Assert.Equal(60, ConsoleUi.RuleText(60).Length);
+            Assert.Equal(10, ConsoleUi.RuleText(10).Length);
+            Assert.Equal(1, ConsoleUi.RuleText(0).Length);      // 0 でも 1 文字
+            Assert.Equal(1, ConsoleUi.RuleText(-5).Length);     // 負でも 1 文字
+        }
+
+        [Fact]
+        public void RuleTextUsesBoxDrawingCharacters()
+        {
+            // 罫線は「─」(U+2500)。文字数を指定した数にする。
+            string rule = ConsoleUi.RuleText(5);
+            Assert.Equal("─────", rule);
+            Assert.Equal(5, rule.Length);
+        }
+
+        [Fact]
+        public void RuleWidthStaysWithinTheConsole()
+        {
+            // 「─」は端末によって 1 桁にも 2 桁にもなる(Ambiguous)。
+            // 端末幅いっぱいに引くと、2 桁の端末で折り返してしまうため、
+            // 幅は端末の桁数から 1 を引いた値に収める。
+            foreach (int width in new[] { 10, 40, 80, 120 })
+            {
+                string rule = ConsoleUi.RuleText(width);
+                Assert.True(rule.Length <= width);
+            }
+        }
+
+        [Fact]
+        public void RuleIsNotDrawnForPipedInput()
+        {
+            // パイプ入力では人が見ないので罫線を引かない。
+            // (罫線を入れると、パイプ出力を機械で読むときに邪魔になる)
+            llm.Reply = MockLlm.Text("ok");
+            runner.WriteConfig(llm.Url, allowTools: false);
+
+            string output = runner.Run("hello\n/exit\n", new[] { "--new" });
+
+            Assert.Contains("hello", output);
+            Assert.DoesNotContain("────", output);
+        }
+
+        [Fact]
+        public void RulesAppearAroundPromptInInteractiveMode()
+        {
+            // 対話入力のときだけ、プロンプトの前後に線を引く。
+            // パイプ入力では人が見ないので引かない。
+            //
+            // ここでは出力先を差し替えて、罫線が書かれることを確かめる。
+            List<string> lines = new();
+            ConsoleUi.SetSink(lines.Add, false);
+            try
+            {
+                ConsoleUi.RuleTop();
+                ConsoleUi.Accent("> ");
+                ConsoleUi.RuleBottom();
+            }
+            finally
+            {
+                ConsoleUi.ResetSink();
+            }
+
+            Assert.Equal(3, lines.Count);
+            Assert.Contains("─", lines[0]);
+            Assert.Equal("> ", lines[1]);
+            Assert.Contains("─", lines[2]);
+        }
+
         // ---------------- 思考・ツール・本文が独立した行になる ----------------
 
         [Fact]

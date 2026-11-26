@@ -136,6 +136,52 @@ namespace Tau
             Raw("\n");
         }
 
+        // ---- 罫線 ----
+        //
+        // 入力の前後に細い線を引いて、入力と応答の境目を分かりやすくする。
+        // 幅は端末の桁数に合わせる(取得できなければ 60)。
+
+        // 罫線の文字数。端末の桁数を「─」の表示幅で割って求める。
+        //
+        // 「─」は端末によって 1 桁にも 2 桁にもなる(Ambiguous)。
+        // 文字数で端末幅ぶん書くと、2 桁の端末では折り返してしまう。
+        static int LineWidth()
+        {
+            int width = 60;
+            try
+            {
+                int w = Console.WindowWidth;
+                if (w > 0 && w <= 10000) width = Math.Max(10, w - 1);
+            }
+            catch { }
+
+            // 実測した幅があればそれで割る(無ければ 1 桁とみなす)
+            int charWidth = MarkdownRenderer.MeasuredWidthOf('\u2500');
+            if (charWidth <= 0) charWidth = 1;
+
+            int n = width / charWidth;
+            return n > 0 ? n : 1;
+        }
+
+        /// <summary>罫線の文字列(テストできるよう分離)。</summary>
+        public static string RuleText(int width)
+        {
+            if (width < 1) width = 1;
+            return new string('─', width);
+        }
+
+        /// <summary>入力の前に引く線。</summary>
+        public static void RuleTop()
+        {
+            Dim(RuleText(LineWidth()) + "\n");
+        }
+
+        /// <summary>入力の後に引く線。</summary>
+        public static void RuleBottom()
+        {
+            Dim(RuleText(LineWidth()) + "\n");
+        }
+
         public static void Banner(Config cfg, SessionCtx ctx, bool resumed)
         {
             Raw("\n");
