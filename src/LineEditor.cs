@@ -187,6 +187,9 @@ namespace Tau
                 bool cancelled;
                 string result = EditLoop(colored, out cancelled, bottomRule);
 
+                // 履歴をたどる位置を戻す(次回は最新から始める)
+                InputHistory.Reset();
+
                 // 罫線を先に出している場合は、カーソルはプロンプト行にあり、
                 // その下に罫線の行がある。確定したら罫線の行を飛ばして
                 // その次へ移る(罫線を上書きしないため)。
@@ -218,6 +221,7 @@ namespace Tau
             {
                 bool cancelled;
                 string result = EditLoop(prompt, out cancelled);
+                InputHistory.Reset();
                 if (cancelled) return null;
                 Console.Write("\n");
                 return result;
@@ -748,9 +752,31 @@ namespace Tau
                             }
                             continue;
 
-                        case ConsoleKey.P:          // Ctrl-P  履歴(未実装)として上キー扱い
-                        case ConsoleKey.N:          // Ctrl-N  下キー扱い
-                            continue;               // 履歴は無いので何もしない
+                        case ConsoleKey.P:          // Ctrl-P  1 つ前の履歴
+                            {
+                                string h = InputHistory.Previous(buf.ToString());
+                                if (h != null)
+                                {
+                                    buf.Clear();
+                                    buf.Append(h);
+                                    pos = buf.Length;
+                                    Redraw(prompt, buf.ToString(), pos);
+                                }
+                            }
+                            continue;
+
+                        case ConsoleKey.N:          // Ctrl-N  1 つ後の履歴
+                            {
+                                string h = InputHistory.Next(buf.ToString());
+                                if (h != null)
+                                {
+                                    buf.Clear();
+                                    buf.Append(h);
+                                    pos = buf.Length;
+                                    Redraw(prompt, buf.ToString(), pos);
+                                }
+                            }
+                            continue;
                     }
                     continue;
                 }
@@ -826,6 +852,32 @@ namespace Tau
                     case ConsoleKey.RightArrow:
                         if (pos < buf.Length) pos++;
                         Redraw(prompt, buf.ToString(), pos);
+                        continue;
+
+                    case ConsoleKey.UpArrow:    // 上キーでも履歴をたどる
+                        {
+                            string h = InputHistory.Previous(buf.ToString());
+                            if (h != null)
+                            {
+                                buf.Clear();
+                                buf.Append(h);
+                                pos = buf.Length;
+                                Redraw(prompt, buf.ToString(), pos);
+                            }
+                        }
+                        continue;
+
+                    case ConsoleKey.DownArrow:  // 下キーでも履歴をたどる
+                        {
+                            string h = InputHistory.Next(buf.ToString());
+                            if (h != null)
+                            {
+                                buf.Clear();
+                                buf.Append(h);
+                                pos = buf.Length;
+                                Redraw(prompt, buf.ToString(), pos);
+                            }
+                        }
                         continue;
 
                     case ConsoleKey.Home:

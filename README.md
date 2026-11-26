@@ -730,6 +730,8 @@ JSON・Markdown・セッション保存などの検証は `dotnet test` に移�
 
 | キー | 動作 |
 |---|---|
+| Ctrl-P / 上キー | 1 つ前の入力(履歴) |
+| Ctrl-N / 下キー | 1 つ後の入力(履歴) |
 | Ctrl-A / Ctrl-E | 行頭 / 行末へ |
 | Ctrl-B / Ctrl-F | 1 文字戻る / 進む |
 | Ctrl-K / Ctrl-U | カーソル以降 / 以前を削除 |
@@ -739,6 +741,10 @@ JSON・Markdown・セッション保存などの検証は `dotnet test` に移�
 | Alt-D | 次の単語を削除 |
 | Ctrl-T | 文字の入れ替え |
 | Ctrl-L | 画面をクリアして再描画 |
+
+履歴は対話で入力した行を覚えます(`/exit` などのコマンドも含みます)。
+空行と、直前と同じ行は残しません。シェルと同じ感覚で使えます。
+履歴は保存しないので、tau を起動し直すと空から始まります。
 
 UTF-8 以外（CP932 など）のコンソールでは、`Console.ReadKey()` が返す日本語が
 壊れる（「あ」→ U+7E3A）ため、従来どおり `Console.ReadLine()` に任せます。
@@ -1317,7 +1323,7 @@ Python は不要です。
 | `tests/HistoryDisplayTests.cs` | 再起動後のツール詳細・旧形式との混在・重複防止・不完全な履歴 |
 
 ```
-Passed!  - Failed: 0, Passed: 557, Skipped: 0, Total: 557
+Passed!  - Failed: 0, Passed: 572, Skipped: 0, Total: 572
 ```
 
 所要時間は約 30 秒です。

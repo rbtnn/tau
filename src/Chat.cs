@@ -293,6 +293,10 @@ namespace Tau
                 line = line.Trim();
                 if (line.Length == 0) continue;   // 空行は何もしない
 
+                // 対話入力は履歴に残す(Ctrl-P / Ctrl-N で呼び出せる)。
+                // パイプ入力は人が打っていないので残さない。
+                if (!inputRedirected) InputHistory.Add(line);
+
                 if (line.StartsWith("/"))
                 {
                     if (HandleCommand(line)) continue;

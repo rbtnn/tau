@@ -737,6 +737,14 @@ namespace Tau
             Console.WriteLine("  /e[xit], /q[uit]   Exit (Ctrl+D also works)");
             Console.WriteLine();
             Console.WriteLine("  [ ] marks the optional part, as in Vim help (/n is /new).");
+            Console.WriteLine();
+            Console.WriteLine("Keys while typing (UTF-8 console only):");
+            Console.WriteLine("  Ctrl-P / Up       Previous input line");
+            Console.WriteLine("  Ctrl-N / Down     Next input line");
+            Console.WriteLine("  Ctrl-A / Ctrl-E   Start / end of line");
+            Console.WriteLine("  Ctrl-K / Ctrl-U   Cut to the end / start of line");
+            Console.WriteLine("  Ctrl-W            Cut the previous word");
+            Console.WriteLine("  Ctrl-Y            Paste what was cut");
         }
 
         // ===================================================================
