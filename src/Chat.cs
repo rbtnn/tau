@@ -188,7 +188,9 @@ namespace Tau
                     }
                     else
                     {
-                        line = LineEditor.ReadLineColored("> ", "36");
+                        // 罫線は入力の前に上下とも出しておく。
+                        // 下線は LineEditor が出すので、ここでは出さない。
+                        line = LineEditor.ReadLineColored("> ", "36", true);
                     }
                 }
                 catch (Exception ex)
@@ -203,9 +205,8 @@ namespace Tau
                 }
                 waitingForInput = false;
 
-                // 入力が確定したら、下に罫線を引く。
-                // Ctrl-G で中止したときは引かない(入力をやり直すため)。
-                if (!inputRedirected && line != null) ConsoleUi.RuleBottom();
+                // 罫線は入力の前に引いてあるので、ここでは何もしない。
+                // (パイプ入力は人が見ないので線を引かない)
 
                 if (LlmClient.DebugOn)
                     ConsoleUi.Dim("  [input] length=" + (line == null ? -1 : line.Length)

@@ -74,6 +74,30 @@ namespace Tau.Tests
         }
 
         [Fact]
+        public void RuleIsDrawnBeforeInputNotAfter()
+        {
+            // 罫線は入力の前に出す(Enter を押した直後に出さない)。
+            // 出力先を差し替えて、呼ばれた順序を確かめる。
+            List<string> lines = new();
+            ConsoleUi.SetSink(lines.Add, false);
+            try
+            {
+                ConsoleUi.RuleTop();
+                ConsoleUi.Accent("> ");
+                ConsoleUi.RuleBottom();   // 入力の前に呼ぶ
+            }
+            finally
+            {
+                ConsoleUi.ResetSink();
+            }
+
+            // 上線・プロンプト・下線の順に書かれる
+            Assert.Contains("─", lines[0]);
+            Assert.Equal("> ", lines[1]);
+            Assert.Contains("─", lines[2]);
+        }
+
+        [Fact]
         public void RulesAppearAroundPromptInInteractiveMode()
         {
             // 対話入力のときだけ、プロンプトの前後に線を引く。

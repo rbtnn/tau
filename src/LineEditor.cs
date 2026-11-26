@@ -163,6 +163,12 @@ namespace Tau
         // 色付きプロンプトで 1 行読む。
         public static string ReadLineColored(string prompt, string ansiColor)
         {
+            return ReadLineColored(prompt, ansiColor, false);
+        }
+
+        // bottomRule=true なら、プロンプトの下の罫線も入力の前に出しておく。
+        public static string ReadLineColored(string prompt, string ansiColor, bool bottomRule)
+        {
             if (!interactive())
             {
                 ConsoleUi.Accent(prompt);
@@ -179,9 +185,21 @@ namespace Tau
             try
             {
                 bool cancelled;
-                string result = EditLoop(colored, out cancelled);
+                string result = EditLoop(colored, out cancelled, bottomRule);
+
+                // 罫線を先に出している場合は、カーソルはプロンプト行にあり、
+                // その下に罫線の行がある。確定したら罫線の行を飛ばして
+                // その次へ移る(罫線を上書きしないため)。
+                if (bottomRule && !cancelled)
+                {
+                    Console.Write("\n\n");
+                }
+                else
+                {
+                    Console.Write("\n");
+                }
+
                 if (cancelled) return null;
-                Console.Write("\n");
                 return result;
             }
             finally
@@ -542,7 +560,15 @@ namespace Tau
 
         // 1 行を編集して返す。cancelled=true なら Ctrl-G / Ctrl-D。
         // prompt は毎回描き直すので、呼び出し側が表示していなくてよい。
+        //
+        // bottomRule=true なら、プロンプトの下にも罫線を引く。
+        // 罫線は入力の前に出しておき、カーソルだけプロンプト行へ戻す。
         static string EditLoop(string prompt, out bool cancelled)
+        {
+            return EditLoop(prompt, out cancelled, false);
+        }
+
+        static string EditLoop(string prompt, out bool cancelled, bool bottomRule)
         {
             cancelled = false;
             StringBuilder buf = new StringBuilder();
@@ -554,6 +580,18 @@ namespace Tau
             // 最初にプロンプトを描いておく。
             // これをしないと、キーを押すまでプロンプトが出ない。
             Redraw(prompt, "", 0);
+
+            // プロンプト行の下に罫線を出しておく。
+            // 出すのは 1 度だけ。Redraw は ESC[2K で「今の行」だけを
+            // 消すので、罫線は残る。書いたあとカーソルをプロンプト行へ戻す。
+            if (bottomRule)
+            {
+                Console.Write("\n");
+                ConsoleUi.RuleBottom();
+                // 罫線の行からプロンプト行へ戻る(1 行上)
+                Console.Write("\u001b[1A");
+                Redraw(prompt, "", 0);
+            }
 
             while (true)
             {
