@@ -141,13 +141,13 @@ namespace Pdf2Text
                 sb.Append("size=").Append(data.Length);
 
                 // バージョン
-                string head = Latin1(data).Substring(0, Math.Min(64, data.Length));
+                string head = PdfUtil.Sub(Latin1(data), 0, Math.Min(64, data.Length));
                 int v = head.IndexOf("%PDF-");
                 if (v >= 0)
                 {
                     int end = head.IndexOfAny(new[] { '\r', '\n' }, v);
                     if (end < 0) end = head.Length;
-                    sb.Append("  version=").Append(head.Substring(v + 5, end - v - 5));
+                    sb.Append("  version=").Append(PdfUtil.Sub(head, v + 5, end - v - 5));
                 }
 
                 PdfDocument doc = PdfDocument.Parse(data);
@@ -333,7 +333,7 @@ namespace Pdf2Text
             int pos = 0;
             while (true)
             {
-                int idx = text.IndexOf("obj", pos, StringComparison.Ordinal);
+                int idx = PdfUtil.SafeIndexOf(text, "obj", pos);
                 if (idx < 0) break;
                 pos = idx + 3;
 
@@ -504,7 +504,7 @@ namespace Pdf2Text
                 if (n <= 0 || first < 0) continue;
 
                 // 先頭に "<num> <offset> ..." が並ぶ
-                string header = body.Substring(0, Math.Min(first, body.Length));
+                string header = PdfUtil.Sub(body, 0, Math.Min(first, body.Length));
                 int[] pairs = ParseIntArray(header);
 
                 for (int i = 0; i + 1 < pairs.Length && i / 2 < n; i += 2)
@@ -543,10 +543,10 @@ namespace Pdf2Text
             int idx = text.LastIndexOf("trailer", StringComparison.Ordinal);
             if (idx >= 0)
             {
-                int brace = text.IndexOf("<<", idx, StringComparison.Ordinal);
+                int brace = PdfUtil.SafeIndexOf(text, "<<", idx);
                 if (brace >= 0)
                 {
-                    Dictionary<string, PdfObject> dict = ParseDictAt(brace);
+                    Dictionary<string, PdfObject> dict = ParseDictAt(text, brace);
                     if (dict != null && dict.ContainsKey("Root"))
                     {
                         int r = RefOf(dict["Root"]);
@@ -593,7 +593,7 @@ namespace Pdf2Text
                 string text = Text;
 
                 // "<num> <gen> obj" の後ろから辞書を読む
-                int obj = text.IndexOf("obj", pos, StringComparison.Ordinal);
+                int obj = PdfUtil.SafeIndexOf(text, "obj", pos);
                 if (obj >= 0)
                 {
                     int start = obj + 3;
@@ -645,21 +645,22 @@ namespace Pdf2Text
                 }
             }
 
-            string fragment = body.Substring(start, Math.Max(0, end - start));
+            string fragment = PdfUtil.Sub(body, start, Math.Max(0, end - start));
             return ParseFragment(fragment);
         }
 
         // 単体の値(辞書・配列など)を文字列から読む。
         static PdfObject ParseFragment(string fragment)
         {
+            if (fragment == null) return null;
+
             int i = SkipWs(fragment, 0);
             if (i >= fragment.Length) return null;
 
             if (string.CompareOrdinal(fragment, i, "<<", 0, 2) == 0)
             {
                 int end = SkipDict(fragment, i);
-                Dictionary<string, PdfObject> dict = ParseDictBody(
-                    fragment.Substring(i + 2, Math.Max(0, end - i - 4)));
+                Dictionary<string, PdfObject> dict = ParseDictBody(PdfUtil.Sub(fragment, i + 2, end - i - 4));
                 return PdfObject.DictObj(dict);
             }
             return null;
@@ -671,7 +672,7 @@ namespace Pdf2Text
 
             if (string.CompareOrdinal(text, start, "<<", 0, 2) == 0)
             {
-                Dictionary<string, PdfObject> dict = ParseDictAt(start);
+                Dictionary<string, PdfObject> dict = ParseDictAt(text, start);
                 if (dict == null) return null;
 
                 // 辞書の直後に stream が続くか
@@ -712,12 +713,18 @@ namespace Pdf2Text
             return text.Length;
         }
 
-        Dictionary<string, PdfObject> ParseDictAt(int start)
+        // text の start から始まる辞書を読む。
+        //
+        // 以前は Text を使っていたが、ParseValueAt から短い断片
+        // (fragment など)の位置を渡すことがあり、別の文字列に対して
+        // インデックスを使うため "Index was out of range" になっていた。
+        Dictionary<string, PdfObject> ParseDictAt(string text, int start)
         {
-            string text = Text;
+            if (text == null) text = Text;
+            if (start < 0 || start + 2 > text.Length) return new Dictionary<string, PdfObject>();
+
             int end = SkipDict(text, start);
-            string body = text.Substring(start + 2, Math.Max(0, end - start - 4));
-            return ParseDictBody(body);
+            return ParseDictBody(PdfUtil.Sub(text, start + 2, end - start - 4));
         }
 
         // "<< ... >>" の中身を読む。
@@ -736,7 +743,7 @@ namespace Pdf2Text
                 int nameStart = i + 1;
                 i++;
                 while (i < body.Length && !IsDelimiterOrWs(body[i])) i++;
-                string key = body.Substring(nameStart, i - nameStart);
+                string key = PdfUtil.Sub(body, nameStart, i - nameStart);
 
                 i = SkipWs(body, i);
                 if (i >= body.Length) break;
@@ -797,7 +804,7 @@ namespace Pdf2Text
                         int start = ++i;
                         while (i < s.Length && !IsDelimiterOrWs(s[i])) i++;
                         next = i;
-                        return PdfObject.Name(s.Substring(start, i - start));
+                        return PdfObject.Name(PdfUtil.Sub(s, start, i - start));
                     }
                 case '(':
                     {
@@ -814,7 +821,7 @@ namespace Pdf2Text
                             }
                             i++;
                         }
-                        string raw = s.Substring(start, Math.Max(0, i - start));
+                        string raw = PdfUtil.Sub(s, start, Math.Max(0, i - start));
                         next = Math.Min(s.Length, i + 1);
                         return PdfObject.Str(Unescape(raw));
                     }
@@ -833,7 +840,7 @@ namespace Pdf2Text
                             i++;
                         }
                         next = Math.Min(s.Length, i + 1);
-                        return PdfObject.Array(s.Substring(start, Math.Max(0, i - start)));
+                        return PdfObject.Array(PdfUtil.Sub(s, start, Math.Max(0, i - start)));
                     }
                 case '<':
                     {
@@ -842,13 +849,13 @@ namespace Pdf2Text
                             int end = SkipDict(s, i);
                             next = end;
                             return PdfObject.DictObj(ParseDictBody(
-                                s.Substring(i + 2, Math.Max(0, end - i - 4))));
+                                PdfUtil.Sub(s, i + 2, Math.Max(0, end - i - 4))));
                         }
                         int start = i + 1;
                         int e = s.IndexOf('>', start);
                         if (e < 0) e = s.Length;
                         next = Math.Min(s.Length, e + 1);
-                        return PdfObject.Str(s.Substring(start, e - start));
+                        return PdfObject.Str(PdfUtil.Sub(s, start, e - start));
                     }
                 default:
                     {
@@ -856,7 +863,7 @@ namespace Pdf2Text
                         int start = i;
                         while (i < s.Length && !IsDelimiterOrWs(s[i])) i++;
                         next = i;
-                        return PdfObject.Name(s.Substring(start, i - start));
+                        return PdfObject.Name(PdfUtil.Sub(s, start, i - start));
                     }
             }
         }
@@ -1426,7 +1433,7 @@ namespace Pdf2Text
                 {
                     int start = ++i;
                     while (i < body.Length && !IsDelimiterOrWs(body[i])) i++;
-                    string glyph = body.Substring(start, i - start);
+                    string glyph = PdfUtil.Sub(body, start, i - start);
                     string text = GlyphToUnicode(glyph);
                     if (text != null) fm.Map[code] = text;
                     code++;
@@ -1452,17 +1459,17 @@ namespace Pdf2Text
             // uni3053 のような 4 桁 16 進
             if (glyph.StartsWith("uni") && glyph.Length >= 7)
             {
-                string hex = glyph.Substring(3);
+                string hex = PdfUtil.Sub(glyph, 3, glyph.Length - 3);
                 if (hex.Length >= 4)
                 {
-                    int v = HexToInt(hex.Substring(0, 4));
+                    int v = HexToInt(PdfUtil.Sub(hex, 0, 4));
                     if (v > 0) return ((char)v).ToString();
                 }
             }
             // u3053 のような形式
             if (glyph.StartsWith("u") && glyph.Length >= 5)
             {
-                int v = HexToInt(glyph.Substring(1, 4));
+                int v = HexToInt(PdfUtil.Sub(glyph, 1, 4));
                 if (v > 0) return ((char)v).ToString();
             }
 
@@ -1560,17 +1567,16 @@ namespace Pdf2Text
             int i = 0;
             while (i < cmap.Length)
             {
-                int bfchar = cmap.IndexOf("beginbfchar", i, StringComparison.Ordinal);
-                int bfrange = cmap.IndexOf("beginbfrange", i, StringComparison.Ordinal);
+                int bfchar = PdfUtil.SafeIndexOf(cmap, "beginbfchar", i);
+                int bfrange = PdfUtil.SafeIndexOf(cmap, "beginbfrange", i);
                 if (bfchar < 0 && bfrange < 0) break;
 
                 bool isChar = (bfchar >= 0 && (bfrange < 0 || bfchar < bfrange));
                 int start = isChar ? bfchar + "beginbfchar".Length : bfrange + "beginbfrange".Length;
-                int endIdx = cmap.IndexOf(isChar ? "endbfchar" : "endbfrange", start,
-                    StringComparison.Ordinal);
+                int endIdx = PdfUtil.SafeIndexOf(cmap, isChar ? "endbfchar" : "endbfrange", start);
                 if (endIdx < 0) break;
 
-                string body = cmap.Substring(start, endIdx - start);
+                string body = PdfUtil.Sub(cmap, start, endIdx - start);
                 if (isChar) ParseBfChar(body, fm);
                 else ParseBfRange(body, fm);
 
@@ -1605,8 +1611,8 @@ namespace Pdf2Text
                 int hiEnd = body.IndexOf('>', hiStart);
                 if (hiEnd < 0) break;
 
-                int lo = HexToInt(body.Substring(loStart + 1, loEnd - loStart - 1));
-                int hi = HexToInt(body.Substring(hiStart + 1, hiEnd - hiStart - 1));
+                int lo = HexToInt(PdfUtil.Sub(body, loStart + 1, loEnd - loStart - 1));
+                int hi = HexToInt(PdfUtil.Sub(body, hiStart + 1, hiEnd - hiStart - 1));
 
                 int after = hiEnd + 1;
 
@@ -1617,7 +1623,7 @@ namespace Pdf2Text
                 {
                     int close = body.IndexOf(']', bracket);
                     if (close < 0) close = body.Length;
-                    string list = body.Substring(bracket + 1, close - bracket - 1);
+                    string list = PdfUtil.Sub(body, bracket + 1, close - bracket - 1);
                     List<string> tokens = HexTokens(list);
                     for (int k = 0; k < tokens.Count && lo + k <= hi; k++)
                         fm.Map[lo + k] = HexToString(tokens[k]);
@@ -1627,7 +1633,7 @@ namespace Pdf2Text
                 {
                     int singleEnd = body.IndexOf('>', single);
                     if (singleEnd < 0) break;
-                    string dstHex = body.Substring(single + 1, singleEnd - single - 1);
+                    string dstHex = PdfUtil.Sub(body, single + 1, singleEnd - single - 1);
                     byte[] dstBytes = HexToBytes(dstHex);
 
                     for (int k = lo; k <= hi && k - lo < 65536; k++)
@@ -1664,7 +1670,7 @@ namespace Pdf2Text
                 if (start < 0) break;
                 int end = s.IndexOf('>', start);
                 if (end < 0) break;
-                list.Add(s.Substring(start + 1, end - start - 1));
+                list.Add(PdfUtil.Sub(s, start + 1, end - start - 1));
                 i = end + 1;
             }
             return list;
@@ -1791,7 +1797,7 @@ namespace Pdf2Text
             else
             {
                 // /Length が無い/壊れている場合は endstream を探す
-                end = text.IndexOf("endstream", start, StringComparison.Ordinal);
+                end = PdfUtil.SafeIndexOf(text, "endstream", start);
                 if (end < 0) return null;
             }
 
@@ -2188,7 +2194,7 @@ namespace Pdf2Text
                     int start = slash + 1;
                     int end = start;
                     while (end < body.Length && !IsDelimiterOrWs(body[end])) end++;
-                    list.Add(body.Substring(start, end - start));
+                    list.Add(PdfUtil.Sub(body, start, end - start));
                     i = end;
                 }
             }
@@ -2323,7 +2329,7 @@ namespace Pdf2Text
                             else if (content[i] == '>' && content[i + 1] == '>') { depth--; i += 2; }
                             else i++;
                         }
-                        operands.Add(content.Substring(dictStart, i - dictStart));
+                        operands.Add(PdfUtil.Sub(content, dictStart, i - dictStart));
                         continue;
                     }
                     string hex = ReadHex(content, ref i, currentFont);
@@ -2370,7 +2376,7 @@ namespace Pdf2Text
                            && content[i] != ')' && content[i] != '>' && content[i] != ']'
                            && content[i] != '/')
                         i++;
-                    operands.Add("/" + content.Substring(nameStart, i - nameStart));
+                    operands.Add("/" + PdfUtil.Sub(content, nameStart, i - nameStart));
                     continue;
                 }
 
@@ -2383,7 +2389,7 @@ namespace Pdf2Text
                     i++;
 
                 if (i == opStart) { i++; continue; }
-                string op = content.Substring(opStart, i - opStart);
+                string op = PdfUtil.Sub(content, opStart, i - opStart);
 
                 // 数値はオペランド(サイズ・位置など)。演算子ではない。
                 if (IsNumberToken(op))

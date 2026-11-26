@@ -622,6 +622,62 @@ namespace Tau.Tests
             Assert.Contains("A", text);
         }
 
+        // ---------------- 壊れた PDF で落ちない ----------------
+
+        [Theory]
+        [InlineData("<< /Type /Catalog /Pages 2 0 R")]           // 閉じていない辞書
+        [InlineData("<<")]                                        // 途中で切れた辞書
+        [InlineData("<< /Length 10 >>\nstream\nxx")]             // 途中で切れたストリーム
+        [InlineData("<< /Type /Page /Contents [1 0 R")]           // 閉じていない配列
+        [InlineData("<< /Type /Font /Encoding /Differences [1 /uni")]  // 途中のグリフ名
+        public void BrokenDictionaryDoesNotThrow(string body)
+        {
+            // 壊れた PDF で Substring が範囲外になり、
+            // "Index was out of range" が利用者に見えていた。
+            byte[] data = Enc("%PDF-1.4\n1 0 obj\n" + body + "\nendobj\n"
+                + "trailer\n<< /Size 2 /Root 1 0 R\n%%EOF\n");
+
+            string path = Path.Combine(dir, "broken.pdf");
+            File.WriteAllBytes(path, data);
+
+            // 例外にならず、読めない旨のメッセージが返る。
+            string text = Read(path, out string error);
+            Assert.True(text == null || text.Length >= 0);
+            if (text == null) Assert.NotNull(error);
+            Assert.DoesNotContain("Index was out of range", error ?? "");
+        }
+
+        [Fact]
+        public void ObjectStreamWithUnclosedDictionaryDoesNotThrow()
+        {
+            // オブジェクトストリームの中身が閉じていない辞書でも落ちない。
+            byte[] inner = Enc("<< /Type /Catalog /Pages 2 0 R");
+            string header = "1 0 ";
+            string stm = Zlib(inner);
+
+            byte[] data = Enc("%PDF-1.5\n"
+                + "1 0 obj\n<< /Type /ObjStm /N 1 /First " + header.Length
+                + " /Length " + stm.Length + " /Filter /FlateDecode >>\nstream\n"
+                + stm + "\nendstream\nendobj\n"
+                + "2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n"
+                + "trailer\n<< /Size 3 /Root 1 0 R >>\n%%EOF\n");
+
+            string path = Path.Combine(dir, "objstm-broken.pdf");
+            File.WriteAllBytes(path, data);
+
+            string text = Read(path, out string error);
+            Assert.True(text == null || text.Length >= 0);
+            Assert.DoesNotContain("Index was out of range", error ?? "");
+            Assert.DoesNotContain("Index was out of range", Pdf2TextDescribe(path));
+        }
+
+        // 壊れた PDF でも Describe が例外にならない。
+        static string Pdf2TextDescribe(string path)
+        {
+            try { return Read(path, out _) ?? ""; }
+            catch (Exception ex) { return ex.Message; }
+        }
+
         // ---------------- Adobe-Japan1 の CID 対応 ----------------
 
         [Fact]
