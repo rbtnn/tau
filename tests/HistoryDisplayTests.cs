@@ -43,11 +43,16 @@ namespace Tau.Tests
         }
 
         // 履歴部分だけを取り出す。
+        //
+        // 履歴の終わりには目印が無くなった(以前は "---- continue below ----")。
+        // 代わりに、その後に出る "/exit" の結果("Bye.")までを取る。
         static string History(string output)
         {
             int a = output.IndexOf("---- conversation so far ----");
-            int b = output.IndexOf("---- continue below ----");
-            Assert.True(a >= 0 && b > a, "history markers missing:\n" + output);
+            Assert.True(a >= 0, "history marker missing:\n" + output);
+
+            int b = output.IndexOf("Bye.", a);
+            if (b < 0) b = output.Length;
             return output.Substring(a, b - a);
         }
 
@@ -150,6 +155,46 @@ namespace Tau.Tests
             string h = History(output);
             Assert.Contains("▶ Tool: shell", h);
             Assert.Contains("echo HELLO", h);
+        }
+
+        // ---------------- 履歴のユーザー入力も罫線で囲む ----------------
+
+        [Fact]
+        public void HistoryUserMessageUsesTheSameRulesAsInput()
+        {
+            // 対話中の入力と同じ形(上下の罫線 + "> ")で表示する。
+            llm.Reply = MockLlm.Text("わかりました");
+            runner.WriteConfig(llm.Url);
+
+            runner.Run("最初の質問\n/exit\n");
+            string h = History(runner.Run("/exit\n"));
+
+            // 罫線とプロンプトが出ている
+            Assert.Contains("────", h);
+            Assert.Contains("> 最初の質問", h);
+
+            // 入力の前後に罫線がある(プロンプトの行の前後)
+            int prompt = h.IndexOf("> 最初の質問", StringComparison.Ordinal);
+            Assert.True(prompt > 0);
+
+            int before = h.LastIndexOf("────", prompt, StringComparison.Ordinal);
+            Assert.True(before >= 0 && before < prompt, "no rule before the prompt");
+
+            int after = h.IndexOf("────", prompt, StringComparison.Ordinal);
+            Assert.True(after > prompt, "no rule after the prompt");
+        }
+
+        [Fact]
+        public void HistoryDoesNotPrintAContinueMarker()
+        {
+            // 履歴の終わりに "---- continue below ----" は出さない。
+            llm.Reply = MockLlm.Text("ok");
+            runner.WriteConfig(llm.Url);
+
+            runner.Run("hi\n/exit\n");
+            string output = runner.Run("/exit\n");
+
+            Assert.DoesNotContain("continue below", output);
         }
 
         [Fact]

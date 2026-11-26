@@ -686,8 +686,12 @@ namespace Tau
                 {
                     callArgs.Clear();
                     displayedSteps.Clear();
+
+                    // 対話中の入力と同じ形にする(上下の罫線 + プロンプト)
+                    ConsoleUi.RuleTop();
                     ConsoleUi.Accent("> ");
                     Console.WriteLine(content);
+                    ConsoleUi.RuleBottom();
                 }
                 else if (role == "assistant")
                 {
@@ -756,7 +760,6 @@ namespace Tau
                     displayedSteps[step] = count + 1;
                 }
             }
-            ConsoleUi.Dim("---- continue below ----");
             Console.WriteLine();
         }
 
