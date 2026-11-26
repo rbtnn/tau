@@ -74,6 +74,28 @@ namespace Tau.Tests
         }
 
         [Fact]
+        public void RuleBottomWithoutNewlineKeepsTheCursorOnTheRule()
+        {
+            // 下罫線を改行なしで書くと、カーソルは罫線の行に残る。
+            // そこで ESC[1A を使えばプロンプト行へ戻れる。
+            // 改行してしまうと 1 行ずれてプロンプトが二重に見える。
+            List<string> lines = new();
+            ConsoleUi.SetSink(lines.Add, false);
+            try
+            {
+                ConsoleUi.RuleBottomNoNewline();
+            }
+            finally
+            {
+                ConsoleUi.ResetSink();
+            }
+
+            Assert.Single(lines);
+            Assert.Contains("─", lines[0]);
+            Assert.DoesNotContain("\n", lines[0]);
+        }
+
+        [Fact]
         public void RuleIsDrawnBeforeInputNotAfter()
         {
             // 罫線は入力の前に出す(Enter を押した直後に出さない)。

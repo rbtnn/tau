@@ -94,6 +94,36 @@ namespace Tau.Tests
         // ---------------- 描画文字列 ----------------
 
         [Fact]
+        public void PromptAndRulesAreDrawnInOrderWithoutDuplicates()
+        {
+            // 罫線を入力前に出すときの並び。
+            // 以前は罫線の後に改行していたため、ESC[1A で戻っても
+            // 罫線の行ではなくなり、プロンプトが 2 つに見えていた。
+            List<string> writes = new();
+            ConsoleUi.SetSink(writes.Add, false);
+            try
+            {
+                ConsoleUi.RuleTop();
+                // プロンプト(Redraw 相当)
+                Console.Write("");
+                ConsoleUi.Accent("> ");
+                // 下罫線(改行なし)
+                ConsoleUi.RuleBottomNoNewline();
+            }
+            finally
+            {
+                ConsoleUi.ResetSink();
+            }
+
+            // 上線・プロンプト・下線の 3 つだけ
+            Assert.Equal(3, writes.Count);
+            Assert.Contains("─", writes[0]);
+            Assert.Equal("> ", writes[1]);
+            Assert.Contains("─", writes[2]);
+            Assert.DoesNotContain("\n", writes[2]);
+        }
+
+        [Fact]
         public void RedrawWithEmptyTextStillShowsThePrompt()
         {
             // 入力前でもプロンプトは見えること。

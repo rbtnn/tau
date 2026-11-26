@@ -586,9 +586,12 @@ namespace Tau
             // 消すので、罫線は残る。書いたあとカーソルをプロンプト行へ戻す。
             if (bottomRule)
             {
+                // 罫線の行へ移り、罫線を書く(改行しない)。
                 Console.Write("\n");
-                ConsoleUi.RuleBottom();
-                // 罫線の行からプロンプト行へ戻る(1 行上)
+                ConsoleUi.RuleBottomNoNewline();
+                // 罫線の行からプロンプト行へ戻る(1 行上)。
+                // ここで改行していると 2 行戻る必要があり、罫線が
+                // ずれてプロンプトが二重に見える。
                 Console.Write("\u001b[1A");
                 Redraw(prompt, "", 0);
             }

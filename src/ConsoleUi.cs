@@ -176,10 +176,20 @@ namespace Tau
             Dim(RuleText(LineWidth()) + "\n");
         }
 
-        /// <summary>入力の後に引く線。</summary>
+        /// <summary>入力の後に引く線(改行あり)。</summary>
         public static void RuleBottom()
         {
             Dim(RuleText(LineWidth()) + "\n");
+        }
+
+        /// <summary>
+        /// 罫線を改行せずに書く。
+        /// カーソルは罫線の行のまま残るので、ESC[1A で 1 行戻れば
+        /// プロンプト行に戻れる。
+        /// </summary>
+        public static void RuleBottomNoNewline()
+        {
+            Dim(RuleText(LineWidth()));
         }
 
         public static void Banner(Config cfg, SessionCtx ctx, bool resumed)
