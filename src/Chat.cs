@@ -661,10 +661,11 @@ namespace Tau
         }
 
         // 過去の会話を表示する(続きから再開したとき)
+        //
+        // 見出しは付けない。罫線で囲まれた入力が並ぶので、履歴であることは
+        // すぐ分かる。
         void PrintHistory(SessionCtx c)
         {
-            Console.WriteLine();
-            ConsoleUi.Dim("---- conversation so far ----");
             Console.WriteLine();
 
             // 直前の assistant の tool_calls から引数を覚えておき、

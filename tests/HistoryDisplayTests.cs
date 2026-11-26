@@ -44,12 +44,14 @@ namespace Tau.Tests
 
         // 履歴部分だけを取り出す。
         //
-        // 履歴の終わりには目印が無くなった(以前は "---- continue below ----")。
-        // 代わりに、その後に出る "/exit" の結果("Bye.")までを取る。
+        // 履歴の前後に目印は無くなった。バナー("/help for commands" の行)の
+        // 後から、"/exit" の結果("Bye.")までを履歴とみなす。
         static string History(string output)
         {
-            int a = output.IndexOf("---- conversation so far ----");
-            Assert.True(a >= 0, "history marker missing:\n" + output);
+            int a = output.IndexOf("/exit to quit", StringComparison.Ordinal);
+            Assert.True(a >= 0, "banner missing:\n" + output);
+            a = output.IndexOf('\n', a);
+            if (a < 0) a = 0;
 
             int b = output.IndexOf("Bye.", a);
             if (b < 0) b = output.Length;
@@ -239,6 +241,21 @@ namespace Tau.Tests
             }
             Assert.True(rule >= 0, "no lower rule found:\n" + h);
             Assert.Equal("", lines[rule + 1]);
+        }
+
+        [Fact]
+        public void HistoryHasNoHeading()
+        {
+            // 履歴の見出しは付けない。罫線で囲まれた入力が並ぶので
+            // 履歴であることはすぐ分かる。
+            llm.Reply = MockLlm.Text("ok");
+            runner.WriteConfig(llm.Url);
+
+            runner.Run("hi\n/exit\n");
+            string output = runner.Run("/exit\n");
+
+            Assert.DoesNotContain("conversation so far", output);
+            Assert.Contains("> hi", output);
         }
 
         [Fact]
