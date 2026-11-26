@@ -151,6 +151,8 @@ namespace Tau
             if (SafeRedirectedBool())
             {
                 Skip("input and output encodings match (stdin is redirected)");
+                // リダイレクト時でも、コンソール自体が UTF-8 かは分かる。
+                ShowConsoleUtf8();
                 return;
             }
 
@@ -163,6 +165,38 @@ namespace Tau
             Check(match, "input and output encodings match",
                 match ? null : "input and output use different code pages;"
                     + " Japanese input may turn into NUL");
+
+            ShowConsoleUtf8();
+        }
+
+        // コンソールが UTF-8(chcp 65001)か、行編集が使えるかを表示する。
+        // UTF-8 のときだけ Emacs 風の行編集を使う。
+        //
+        // 入力がリダイレクトされているときは、利用者のコンソール設定と
+        // 関係ないので判定しない(情報として表示するだけ)。
+        static void ShowConsoleUtf8()
+        {
+            if (!Program.IsWindows()) return;
+
+            bool utf8 = LineEditor.IsUtf8Console();
+            Console.WriteLine("    console code page: "
+                + (utf8 ? "UTF-8 (chcp 65001)" : "not UTF-8"));
+
+            if (SafeRedirectedBool())
+            {
+                Skip("console is UTF-8 (chcp 65001) (stdin is redirected)");
+            }
+            else
+            {
+                Check(utf8, "console is UTF-8 (chcp 65001)",
+                    utf8 ? null
+                        : "run `chcp 65001` first. Without it, Japanese typed into"
+                          + " the console can be garbled, and line editing"
+                          + " (Ctrl-A, Ctrl-K, ...) stays off");
+            }
+
+            Console.WriteLine("    line editing: "
+                + (LineEditor.Available ? "on (Emacs keys)" : "off (Console.ReadLine)"));
         }
 
         // ---------------- 2. コンソールの行編集モード ----------------

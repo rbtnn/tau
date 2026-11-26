@@ -355,7 +355,7 @@ TAU_CONFIG
   "proxyPass": "",
   "useSystemProxy": true,
   "systemPrompt": "",
-  "inputEncoding": "shift-jis",
+  "inputEncoding": "auto",
   "memoryMaxChars": 8000
 }
 ```
@@ -425,19 +425,24 @@ TAU_CONFIG
 
 | `inputEncoding` | 内容 |
 |---|---|
-| **`shift-jis`**（既定） | Shift-JIS（CP932）。**Windows のコンソール既定で、日本語入力が安定** |
-| `utf-8` | UTF-8（CP65001）。コンソールが UTF-8 のとき |
+| **`auto`**（既定） | コンソールに合わせる。`chcp 65001` なら UTF-8、それ以外は Shift-JIS（CP932） |
+| `utf-8` | 常に UTF-8（CP65001） |
+| `shift-jis` | 常に Shift-JIS（CP932） |
 | `default` | コンソール/OS の既定に任せる（変更しない） |
 
 ```
 tau.json:
-  "inputEncoding": "shift-jis"
+  "inputEncoding": "auto"
 ```
 
-**Shift-JIS が既定です。** Windows のコンソールは CP932 で動いていることが多く、
-入力側を UTF-8 にすると日本語が NUL 文字（`\u0000`）に化けてしまいます
-（dotnet/runtime#43295）。出力は UTF-8 でも、入力は CP932 のままにしておくのが
-最も安定します。
+**`auto` が既定です。** 起動時にコンソールのコードページを見て決めます。
+
+- `chcp 65001`（UTF-8）のコンソールなら、入力も UTF-8 のまま使います
+- それ以外（CP932 など）なら、従来どおり CP932 にします
+
+出力は常に UTF-8 です。入力と出力のコードページが食い違うと、Windows では
+日本語が NUL 文字（`\u0000`）に化けることがあります（dotnet/runtime#43295）。
+`auto` はこの食い違いを避けます。
 
 - 入力が**リダイレクト**されている場合は設定に関係なく触りません（パイプ・ファイル入力）
 - 設定は `--config set inputEncoding utf-8` または `--config edit` の **16. Input Encoding** で変更できます
@@ -685,12 +690,42 @@ JSON・Markdown・セッション保存などの検証は `dotnet test` に移�
 `diag_input.bat` をダブルクリックすると、バージョン・コードページ・
 環境変数・長い日本語入力のテストをまとめて実行できます。
 
+#### 行編集（Emacs キーバインド）
+
+`chcp 65001`（UTF-8）のコンソールでは、自前の行編集が有効になります。
+
+| キー | 動作 |
+|---|---|
+| Ctrl-A / Ctrl-E | 行頭 / 行末へ |
+| Ctrl-B / Ctrl-F | 1 文字戻る / 進む |
+| Ctrl-K / Ctrl-U | カーソル以降 / 以前を削除 |
+| Ctrl-W | 直前の単語を削除 |
+| Ctrl-Y | ペースト |
+| Alt-B / Alt-F | 単語単位で移動 |
+| Alt-D | 次の単語を削除 |
+| Ctrl-T | 文字の入れ替え |
+| Ctrl-L | 画面をクリアして再描画 |
+
+UTF-8 以外（CP932 など）のコンソールでは、`Console.ReadKey()` が返す日本語が
+壊れる（「あ」→ U+7E3A）ため、従来どおり `Console.ReadLine()` に任せます。
+
+`tau --test` で今どちらで動いているかを確認できます。
+
+```
+console code page: UTF-8 (chcp 65001)
+line editing: on (Emacs keys)
+```
+
+`inputEncoding` に `utf-8` や `shift-jis` を明示した場合は、自動判定より
+その指定が優先されます。
+
 #### 入力が返ってこない場合
 
 Windows のコンソールでは `Console.ReadKey()` が IME と組み合わさると
-入力が返らないことがあります。そのため **Windows では自前の行編集を
-既定で使いません**（`Console.ReadLine()` に任せます）。
-実際のコンソール コードページ（`GetConsoleCP`）も確認しています。
+入力が返らないことがあります。そのため UTF-8 以外のコンソールでは
+自前の行編集を使いません（`Console.ReadLine()` に任せます）。
+実際のコンソール コードページ（`GetConsoleCP` / `GetConsoleOutputCP`）も
+確認しています。
 
 `inputEncoding` が実際のコンソールと合っていないと入力が壊れます。
 `chcp` で表示されるコードページと `inputEncoding` を合わせてください。
@@ -1248,7 +1283,7 @@ Python は不要です。
 | `tests/HistoryDisplayTests.cs` | 再起動後のツール詳細・旧形式との混在・重複防止・不完全な履歴 |
 
 ```
-Passed!  - Failed: 0, Passed: 526, Skipped: 0, Total: 526
+Passed!  - Failed: 0, Passed: 539, Skipped: 0, Total: 539
 ```
 
 所要時間は約 30 秒です。

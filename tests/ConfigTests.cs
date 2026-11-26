@@ -86,6 +86,27 @@ namespace Tau.Tests
         }
 
         [Fact]
+        public void DefaultInputEncodingFollowsTheConsole()
+        {
+            // 既定は auto。chcp 65001 のコンソールなら UTF-8、
+            // それ以外は Shift-JIS(CP932) になる。
+            Environment.SetEnvironmentVariable("TAU_INPUT_ENCODING", null);
+
+            var c = new Config(CfgPath());
+            Assert.Equal("auto", c.InputEncoding);
+        }
+
+        [Fact]
+        public void InputEncodingCanBePinnedToUtf8()
+        {
+            // 明示指定は自動判定より優先される。
+            Environment.SetEnvironmentVariable("TAU_INPUT_ENCODING", "utf-8");
+
+            var c = new Config(CfgPath());
+            Assert.Equal("utf-8", c.InputEncoding);
+        }
+
+        [Fact]
         public void SavesAndLoadsInputEncoding()
         {
             string path = CfgPath();

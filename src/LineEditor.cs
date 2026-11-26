@@ -57,21 +57,60 @@ namespace Tau
         // Console.ReadKey() は Console.InputEncoding に従ってバイトを文字に
         // 変換する。コンソールの実際のコードページ(GetConsoleCP)と
         // Console.InputEncoding が食い違っていると日本語が壊れる
-        // (例: 「あ」→ U+7E3A)。起動時に SetConsoleCP で両者を一致させて
-        // いるので、ここでは「一致しているか」だけを確認する。
-        // 自前の行編集は使わない。
+        // (例: 「あ」→ U+7E3A)。
         //
-        // Console.ReadKey() は Console.InputEncoding に従ってバイトを文字に
-        // 変換する。コンソールの実際のコードページ(GetConsoleCP)と食い違うと
-        // 日本語が壊れ(「あ」→ U+7E3A)、長い入力が途中で切れることもある。
-        // 安定して動く Console.ReadLine() に任せる。
-        //
-        // 起動時に SetConsoleCP でコードページを一致させているので、将来
-        // 復活させる場合はここで enabled = true にすればよい。ただし
-        // 実機で長い日本語・IME の確認をしてから有効にすること。
+        // コンソールが UTF-8(chcp 65001)なら両者は一致し、日本語も壊れない。
+        // そのときだけ自前の行編集を使う。Shift-JIS(CP932)などでは
+        // 従来どおり Console.ReadLine() に任せる。
         public static void Configure(Config cfg)
         {
             enabled = false;
+
+            // 対話コンソールでなければ使わない(パイプ・リダイレクト)
+            try { if (Console.IsInputRedirected) return; }
+            catch { return; }
+
+            // コンソールが UTF-8 か
+            if (!IsUtf8Console()) return;
+
+            // Console.InputEncoding も UTF-8 か(食い違うと日本語が壊れる)
+            try
+            {
+                if (Console.InputEncoding.CodePage != 65001) return;
+            }
+            catch { return; }
+
+            // 利用者が明示的に別のエンコーディングを指定している場合は、
+            // その指定を尊重して使わない。
+            if (cfg != null && cfg.InputEncoding != null)
+            {
+                string want = cfg.InputEncoding.Trim().ToLowerInvariant();
+                if (want.Length > 0 && want != "default" && want != "auto"
+                    && want != "utf-8" && want != "utf8" && want != "65001")
+                    return;
+            }
+
+            enabled = true;
+        }
+
+        // コンソールの入出力が UTF-8(chcp 65001)か。
+        //
+        // Windows 以外は常に真(UTF-8 の端末で動く)。
+        // Windows で取得できない場合も真(判断材料が無いので妨げない)。
+        public static bool IsUtf8Console()
+        {
+            try
+            {
+                int p = (int)Environment.OSVersion.Platform;
+                if (p != 2 && p != 1) return true;   // Windows 以外
+
+                uint inCp = GetConsoleCP();
+                uint outCp = GetConsoleOutputCP();
+                if (inCp == 0 || outCp == 0) return true;   // コンソールが無い
+
+                return inCp == 65001 && outCp == 65001;
+            }
+            catch { return true; }
         }
 
         internal static int ConsoleInputCodePagePublic()
@@ -93,6 +132,10 @@ namespace Tau
         // コンソールのコードページを変更する(SetConsoleCP)。
         [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
         internal static extern bool SetConsoleCP(uint wCodePageID);
+
+        // コンソールの実際の出力コードページ(GetConsoleOutputCP)。
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+        internal static extern uint GetConsoleOutputCP();
 
         static int ConsoleInputCodePage()
         {

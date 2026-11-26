@@ -77,7 +77,9 @@ namespace Tau
             MemoryMaxChars = SafeInt(Env("TAU_MEMORY_MAX_CHARS", "8000"), 8000);
 
 
-            InputEncoding = Env("TAU_INPUT_ENCODING", "shift-jis");
+            // auto は「コンソールに合わせる」。
+            // chcp 65001 のコンソールなら UTF-8、それ以外は Shift-JIS(CP932)。
+            InputEncoding = Env("TAU_INPUT_ENCODING", "auto");
 
             SystemPrompt = Env("AI_SYSTEM_PROMPT",
                 "You are an AI agent that runs in the console."

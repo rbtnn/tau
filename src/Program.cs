@@ -481,7 +481,7 @@ namespace Tau
                 // OS の既定(Windows では CP437)のままで、日本語を読めない。
                 // 設定の inputEncoding を優先して、パイプでも正しく読む。
                 Encoding enc = null;
-                if (cfg != null)
+                if (cfg != null && !IsAutoEncoding(cfg.InputEncoding))
                     enc = ResolveEncoding(cfg.InputEncoding);
                 if (enc == null)
                 {
@@ -518,8 +518,21 @@ namespace Tau
             if (redirected) return;
 
             string want = (cfg != null && cfg.InputEncoding != null && cfg.InputEncoding.Trim().Length > 0)
-                ? cfg.InputEncoding
-                : "shift-jis";
+                ? cfg.InputEncoding.Trim()
+                : "auto";
+
+            // コンソールが UTF-8(chcp 65001)なら、入力もそのまま UTF-8 にする。
+            // コードページと Console.InputEncoding が最初から一致しているので、
+            // SetConsoleCP で無理に合わせる必要が無い。
+            // ここで CP932 に変えると、ReadKey が返す日本語が壊れる。
+            if (IsAutoEncoding(want) && LineEditor.IsUtf8Console())
+            {
+                try { Console.InputEncoding = Encoding.UTF8; } catch { }
+                return;
+            }
+
+            // auto で UTF-8 でないコンソールなら、従来どおり CP932 にする
+            if (IsAutoEncoding(want)) want = "shift-jis";
 
             Encoding enc = ResolveEncoding(want);
             if (enc == null)
@@ -542,6 +555,17 @@ namespace Tau
             // その状態で Console.ReadKey() を使うと日本語が壊れる
             // (例: 「あ」→ U+7E3A)。両者を一致させておく。
             try { SetConsoleCPIfPossible(enc.CodePage); } catch { }
+        }
+
+        // inputEncoding が「自動」指定か(空 / default / auto)。
+        // utf-8 や shift-jis は明示指定として扱う。
+        internal static bool IsAutoEncodingPublic(string name) { return IsAutoEncoding(name); }
+
+        static bool IsAutoEncoding(string name)
+        {
+            if (name == null) return true;
+            string n = name.Trim().ToLowerInvariant();
+            return n.Length == 0 || n == "default" || n == "auto";
         }
 
         // コンソールの実際のコードページを、指定した値に合わせる。

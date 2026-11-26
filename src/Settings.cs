@@ -74,8 +74,9 @@ namespace Tau
             new Field { Key = "systemPrompt", Label = "System Prompt", Kind = "text",
                 Help = "System prompt (multi-line)" },
             new Field { Key = "inputEncoding", Label = "Input Encoding", Kind = "choice",
-                Help = "Console input encoding: shift-jis (cp932) / utf-8 / default",
-                Choices = new string[] { "shift-jis", "utf-8", "default" } },
+                Help = "Console input encoding: auto (follow chcp) / shift-jis (cp932)"
+                    + " / utf-8 / default",
+                Choices = new string[] { "auto", "shift-jis", "utf-8", "default" } },
         };
 
         public static Field Find(string key)
