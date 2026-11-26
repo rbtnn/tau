@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Text;
 using Tau;
 using Xunit;
@@ -626,6 +627,76 @@ namespace Tau.Tests
             // 24 番は breve (U+02D8)
             Assert.Contains("\u02D8", text);
             Assert.Contains("A", text);
+        }
+
+        // ---------------- 標準エンコーディングのフォント ----------------
+
+        [Fact]
+        public void WinAnsiFontIsReadWithoutToUnicode()
+        {
+            // Type1 / TrueType で /Encoding /WinAnsiEncoding のフォントは、
+            // ToUnicode が無くても読める。以前はこれを「復号できない」と
+            // 判定して、PDF 全体を読めない扱いにしていた。
+            // WinAnsi の 0x93/0x94 は “ ” 。Latin1 の文字列で組み立てる。
+            byte[] content = new byte[] { }
+                .Concat(Enc("BT /F1 12 Tf 72 720 Td (caf\u00E9 "))
+                .Concat(new byte[] { 0x93 })
+                .Concat(Enc("quote"))
+                .Concat(new byte[] { 0x94 })
+                .Concat(Enc(") Tj ET"))
+                .ToArray();
+            string contentZ = Zlib(content);
+
+            string path = WriteSimplePdf(new List<byte[]>
+            {
+                Enc("<< /Type /Catalog /Pages 2 0 R >>"),
+                Enc("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+                Enc("<< /Type /Page /Parent 2 0 R /Contents 4 0 R "
+                    + "/Resources << /Font << /F1 5 0 R >> >> >>"),
+                Enc("<< /Length " + contentZ.Length + " /Filter /FlateDecode >>\nstream\n"
+                    + contentZ + "\nendstream"),
+                Enc("<< /Type /Font /Subtype /TrueType /BaseFont /SegoeUI "
+                    + "/Encoding /WinAnsiEncoding >>"),
+            }, 1, 7);
+
+            string text = Read(path, out string error);
+            Assert.True(error == null, error);
+            Assert.Equal("caf\u00E9 \u201Cquote\u201D", text);
+        }
+
+        [Fact]
+        public void MixedFontsWithOneUndecodableStillReadsText()
+        {
+            // 復号できるフォントと、できないフォントが混在する場合。
+            // 1 バイトのフォントは標準エンコーディングで読めるので、
+            // 全体を「読めない」にしない。
+            byte[] content = Enc("BT /F1 12 Tf 72 720 Td (hello) Tj /F2 12 Tf (world) Tj ET");
+            string contentZ = Zlib(content);
+
+            string path = WriteSimplePdf(new List<byte[]>
+            {
+                Enc("<< /Type /Catalog /Pages 2 0 R >>"),
+                Enc("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+                Enc("<< /Type /Page /Parent 2 0 R /Contents 4 0 R "
+                    + "/Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>"),
+                Enc("<< /Length " + contentZ.Length + " /Filter /FlateDecode >>\nstream\n"
+                    + contentZ + "\nendstream"),
+                Enc("<< /Type /Font /Subtype /TrueType /BaseFont /Georgia "
+                    + "/Encoding /WinAnsiEncoding >>"),
+                Enc("<< /Type /Font /Subtype /Type0 /BaseFont /Mystery "
+                    + "/Encoding /Identity-H /DescendantFonts [7 0 R] >>"),
+                Enc("<< /Type /Font /Subtype /CIDFontType2 /BaseFont /Mystery "
+                    + "/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> >>"),
+            }, 1, 8);
+
+            string info = Describe(path);
+            Assert.Contains("undecodable=1", info);
+            Assert.Contains("UNDECODABLE", info);
+
+            // 1 バイトのフォントの分は読める。
+            string text = Read(path, out _);
+            Assert.NotNull(text);
+            Assert.Contains("hello", text);
         }
 
         // ---------------- --describe のフォント情報 ----------------

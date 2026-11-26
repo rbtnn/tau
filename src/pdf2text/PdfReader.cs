@@ -59,12 +59,20 @@ namespace Pdf2Text
                 int pages = 0;
 
                 bool undecodable = false;
+                bool anyDecodable = false;
 
                 foreach (PdfDocument.PageContent page in doc.Pages())
                 {
                     // 文字の対応表が無いフォントがあれば、復元できない。
+                    // ただし 1 バイトのフォントは標準エンコーディングで
+                    // 読めるので、そちらがあれば全体は読める。
                     foreach (KeyValuePair<string, FontMap> f in page.Fonts)
-                        if (f.Value != null && f.Value.Undecodable) undecodable = true;
+                    {
+                        FontMap fm = f.Value;
+                        if (fm == null) continue;
+                        if (fm.Undecodable) undecodable = true;
+                        else anyDecodable = true;
+                    }
 
                     // 1 ページに複数の内容ストリームがある場合は連結して読む。
                     StringBuilder pageText = new();
@@ -107,7 +115,11 @@ namespace Pdf2Text
 
                 // 制御文字だけ(グリフ番号がそのまま出た場合)は意味のある
                 // テキストではない。読み取れなかったものとして扱う。
-                if (!HasReadableText(result) || undecodable)
+                // すべてのフォントが復号できないときだけ、読めないと判定する。
+                // 一部だけなら、読めた分を返す。
+                bool allUndecodable = undecodable && !anyDecodable;
+
+                if (!HasReadableText(result) || allUndecodable)
                 {
                     error = (doc.HadContent || undecodable)
                         ? "the PDF has text, but it could not be decoded "
@@ -1199,6 +1211,11 @@ namespace Pdf2Text
                 else if (e != null && e.Dict != null) fm.Encoding = "(dict)";
             }
 
+            // 標準の 1 バイトエンコーディング。
+            // ToUnicode も Differences も無くても、これで文字に戻せる。
+            // (Type1 / TrueType で WinAnsiEncoding のままのフォントは多い)
+            fm.ByteEncoding = ByteEncodingOf(fontObj);
+
             // 2 バイト文字か(Identity-H / Identity-V / Type0)
             if (fontObj.Dict.ContainsKey("Subtype")
                 && fontObj.Dict["Subtype"].NameValue == "Type0")
@@ -1258,6 +1275,9 @@ namespace Pdf2Text
                 }
             }
 
+            // 2 バイトの CID で、ToUnicode も Japan1 の表も無ければ復号できない。
+            // 1 バイトのフォントは標準エンコーディングで読めるので、
+            // ここでは「復号できない」にしない。
             if (!fm.HasMap && fm.TwoByte && !fm.UseJapan1) fm.Undecodable = true;
 
             if (!fm.HasMap && fontObj.Dict.ContainsKey("DescendantFonts"))
@@ -1274,6 +1294,47 @@ namespace Pdf2Text
 
             fm.MappedCount = fm.Map.Count;
             return fm;
+        }
+
+        // /Encoding の標準名から、1 バイトの変換方法を決める。
+        static int ByteEncodingOf(PdfObject fontObj)
+        {
+            if (!fontObj.Dict.ContainsKey("Encoding")) return 1;   // 既定は WinAnsi
+
+            PdfObject enc = fontObj.Dict["Encoding"];
+            if (enc == null) return 1;
+            if (enc.IsName)
+            {
+                switch (enc.NameValue)
+                {
+                    case "WinAnsiEncoding": return 1;
+                    case "MacRomanEncoding": return 2;
+                    case "StandardEncoding": return 3;
+                    case "PDFDocEncoding": return 4;
+                    default: return 0;
+                }
+            }
+            if (enc.Dict != null)
+            {
+                // 辞書形式のときは /BaseEncoding を見る
+                if (enc.Dict.ContainsKey("BaseEncoding"))
+                {
+                    PdfObject b = enc.Dict["BaseEncoding"];
+                    if (b != null && b.IsName)
+                    {
+                        switch (b.NameValue)
+                        {
+                            case "WinAnsiEncoding": return 1;
+                            case "MacRomanEncoding": return 2;
+                            case "StandardEncoding": return 3;
+                            default: return 0;
+                        }
+                    }
+                }
+                // Differences だけなら、既定は Standard ではなく WinAnsi 扱い
+                return 1;
+            }
+            return 1;
         }
 
         // /CIDSystemInfo の Ordering を取り出す(診断用)。
@@ -2287,6 +2348,11 @@ namespace Pdf2Text
         // Adobe-Japan1 の標準 CID 対応表で復元する
         public bool UseJapan1;
 
+        // 標準の 1 バイトエンコーディング。
+        // ToUnicode が無くても、これで文字に戻せる。
+        //   0 = なし / 1 = WinAnsi / 2 = MacRoman / 3 = Standard / 4 = PDFDoc
+        public int ByteEncoding;
+
         // 診断用(--describe で表示する)
         public string BaseFont = "";
         public string Subtype = "";
@@ -2780,23 +2846,217 @@ namespace Pdf2Text
             if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF)
                 return Encoding.BigEndianUnicode.GetString(bytes, 2, bytes.Length - 2);
 
+            // 標準の 1 バイトエンコーディングで変換する
+            return DecodeBytes(bytes, font != null ? font.ByteEncoding : 1);
+        }
+
+        // リテラル文字列を、フォントに応じて文字へ変換する。
+        // ToUnicode が無い場合は、標準エンコーディングで読む。
+        static string DecodeString(string raw, FontMap font)
+        {
+            if (raw.Length == 0) return raw;
+            byte[] bytes = Encoding.Latin1.GetBytes(raw);
+
+            if (font != null && (font.HasMap || font.UseJapan1))
+                return DecodeWithMap(bytes, font);
+
+            return DecodeBytes(bytes, font != null ? font.ByteEncoding : 1);
+        }
+
+        // 1 バイトコードを、指定のエンコーディングで文字にする。
+        //
+        // ToUnicode が無い Type1 / TrueType のフォントは、
+        // /Encoding の名前(WinAnsiEncoding など)で読める。
+        // 以前は ASCII 以外をすべて '?' にしていたため、
+        // 復号できない PDF と誤判定していた。
+        static string DecodeBytes(byte[] bytes, int kind)
+        {
+            if (kind == 0) kind = 1;
+
             StringBuilder sb = new();
-            for (int k = 0; k < bytes.Length; k++)
+            foreach (byte b in bytes)
             {
-                byte b = bytes[k];
-                // PDFDocEncoding の ASCII 部分だけ扱う
-                sb.Append(b < 0x80 ? (char)b : '?');
+                if (b < 0x20) continue;   // 制御文字は落とす
+                sb.Append(kind == 2 ? MacRomanChar(b) : WinAnsiChar(b));
             }
             return sb.ToString();
         }
 
-        // リテラル文字列を、フォントに応じて文字へ変換する。
-        // ToUnicode が無い場合は、そのまま返す(従来の動作)。
-        static string DecodeString(string raw, FontMap font)
+        // WinAnsi(CP1252) の 0x80-0x9F。それ以外は Latin-1 と同じ。
+        //
+        // Encoding.GetEncoding(1252) は InvariantGlobalization では
+        // 使えないため、表を自前で持つ(どの環境でも同じ結果になる)。
+        static char WinAnsiChar(byte b)
         {
-            if (font == null || (!font.HasMap && !font.UseJapan1) || raw.Length == 0) return raw;
-            byte[] bytes = Encoding.Latin1.GetBytes(raw);
-            return DecodeWithMap(bytes, font);
+            switch (b)
+            {
+                case 0x80: return '\u20AC';   // €
+                case 0x82: return '\u201A';   // ‚
+                case 0x83: return '\u0192';   // ƒ
+                case 0x84: return '\u201E';   // „
+                case 0x85: return '\u2026';   // …
+                case 0x86: return '\u2020';   // †
+                case 0x87: return '\u2021';   // ‡
+                case 0x88: return '\u02C6';   // ˆ
+                case 0x89: return '\u2030';   // ‰
+                case 0x8A: return '\u0160';   // Š
+                case 0x8B: return '\u2039';   // ‹
+                case 0x8C: return '\u0152';   // Œ
+                case 0x8E: return '\u017D';   // Ž
+                case 0x91: return '\u2018';   // ‘
+                case 0x92: return '\u2019';   // ’
+                case 0x93: return '\u201C';   // “
+                case 0x94: return '\u201D';   // ”
+                case 0x95: return '\u2022';   // •
+                case 0x96: return '\u2013';   // –
+                case 0x97: return '\u2014';   // —
+                case 0x98: return '\u02DC';   // ˜
+                case 0x99: return '\u2122';   // ™
+                case 0x9A: return '\u0161';   // š
+                case 0x9B: return '\u203A';   // ›
+                case 0x9C: return '\u0153';   // œ
+                case 0x9E: return '\u017E';   // ž
+                case 0x9F: return '\u0178';   // Ÿ
+                default: return (char)b;
+            }
+        }
+
+        // MacRoman の 0x80-0xFF(ASCII 以外)。
+        static char MacRomanChar(byte b)
+        {
+            if (b < 0x80) return (char)b;
+            return b switch
+            {
+                0x80 => '\u00C4',
+                0x81 => '\u00C5',
+                0x82 => '\u00C7',
+                0x83 => '\u00C9',
+                0x84 => '\u00D1',
+                0x85 => '\u00D6',
+                0x86 => '\u00DC',
+                0x87 => '\u00E1',
+                0x88 => '\u00E0',
+                0x89 => '\u00E2',
+                0x8A => '\u00E4',
+                0x8B => '\u00E3',
+                0x8C => '\u00E5',
+                0x8D => '\u00E7',
+                0x8E => '\u00E9',
+                0x8F => '\u00E8',
+                0x90 => '\u00EA',
+                0x91 => '\u00EB',
+                0x92 => '\u00ED',
+                0x93 => '\u00EC',
+                0x94 => '\u00EE',
+                0x95 => '\u00EF',
+                0x96 => '\u00F1',
+                0x97 => '\u00F3',
+                0x98 => '\u00F2',
+                0x99 => '\u00F4',
+                0x9A => '\u00F6',
+                0x9B => '\u00F5',
+                0x9C => '\u00FA',
+                0x9D => '\u00F9',
+                0x9E => '\u00FB',
+                0x9F => '\u00FC',
+                0xA0 => '\u2020',
+                0xA1 => '\u00B0',
+                0xA2 => '\u00A2',
+                0xA3 => '\u00A3',
+                0xA4 => '\u00A7',
+                0xA5 => '\u2022',
+                0xA6 => '\u00B6',
+                0xA7 => '\u00DF',
+                0xA8 => '\u00AE',
+                0xA9 => '\u00A9',
+                0xAA => '\u2122',
+                0xAB => '\u00B4',
+                0xAC => '\u00A8',
+                0xAD => '\u2260',
+                0xAE => '\u00C6',
+                0xAF => '\u00D8',
+                0xB0 => '\u221E',
+                0xB1 => '\u00B1',
+                0xB2 => '\u2264',
+                0xB3 => '\u2265',
+                0xB4 => '\u00A5',
+                0xB5 => '\u00B5',
+                0xB6 => '\u2202',
+                0xB7 => '\u2211',
+                0xB8 => '\u220F',
+                0xB9 => '\u03C0',
+                0xBA => '\u222B',
+                0xBB => '\u00AA',
+                0xBC => '\u00BA',
+                0xBD => '\u03A9',
+                0xBE => '\u00E6',
+                0xBF => '\u00F8',
+                0xC0 => '\u00BF',
+                0xC1 => '\u00A1',
+                0xC2 => '\u00AC',
+                0xC3 => '\u221A',
+                0xC4 => '\u0192',
+                0xC5 => '\u2248',
+                0xC6 => '\u2206',
+                0xC7 => '\u00AB',
+                0xC8 => '\u00BB',
+                0xC9 => '\u2026',
+                0xCA => '\u00A0',
+                0xCB => '\u00C0',
+                0xCC => '\u00C3',
+                0xCD => '\u00D5',
+                0xCE => '\u0152',
+                0xCF => '\u0153',
+                0xD0 => '\u2013',
+                0xD1 => '\u2014',
+                0xD2 => '\u201C',
+                0xD3 => '\u201D',
+                0xD4 => '\u2018',
+                0xD5 => '\u2019',
+                0xD6 => '\u00F7',
+                0xD7 => '\u25CA',
+                0xD8 => '\u00FF',
+                0xD9 => '\u0178',
+                0xDA => '\u2044',
+                0xDB => '\u20AC',
+                0xDC => '\u2039',
+                0xDD => '\u203A',
+                0xDE => '\uFB01',
+                0xDF => '\uFB02',
+                0xE0 => '\u2021',
+                0xE1 => '\u00B7',
+                0xE2 => '\u201A',
+                0xE3 => '\u201E',
+                0xE4 => '\u2030',
+                0xE5 => '\u00C2',
+                0xE6 => '\u00CA',
+                0xE7 => '\u00C1',
+                0xE8 => '\u00CB',
+                0xE9 => '\u00C8',
+                0xEA => '\u00CD',
+                0xEB => '\u00CE',
+                0xEC => '\u00CF',
+                0xED => '\u00CC',
+                0xEE => '\u00D3',
+                0xEF => '\u00D4',
+                0xF0 => '\uF8FF',
+                0xF1 => '\u00D2',
+                0xF2 => '\u00DA',
+                0xF3 => '\u00DB',
+                0xF4 => '\u00D9',
+                0xF5 => '\u0131',
+                0xF6 => '\u02C6',
+                0xF7 => '\u02DC',
+                0xF8 => '\u00AF',
+                0xF9 => '\u02D8',
+                0xFA => '\u02D9',
+                0xFB => '\u02DA',
+                0xFC => '\u00B8',
+                0xFD => '\u02DD',
+                0xFE => '\u02DB',
+                0xFF => '\u02C7',
+                _ => '?',
+            };
         }
 
         // フォントのコード列を、ToUnicode の対応表で文字列にする。

@@ -884,6 +884,11 @@ size=9858475  version=1.7  objects=950  objstm=872  encrypted=no  pages=268  con
 | `mapped` | 復元できた文字コードの数 |
 | `UNDECODABLE` | 対応表が無く、文字に戻せない |
 
+`undecodable` は「文字に戻せないフォントの数」です。1 つでも復号できる
+フォントがあれば、読めた分は返します。以前は 1 つでも復号できない
+フォントがあると PDF 全体を読めない扱いにしていたため、
+`WinAnsiEncoding` の英字フォントが混ざっているだけで失敗していました。
+
 引数と出力は `pdf2text.exe` などとまったく同じです。終了コードも同じで、
 成功が 0、読めなかったのが 1、使い方の誤りが 2 です。
 
@@ -911,6 +916,7 @@ PDF は次の形式に対応しています。
 | フォント | CID フォント（`Identity-H`/`Identity-V`）+ `ToUnicode` CMap |
 | フォント（代替） | `/Encoding /Differences` のグリフ名、埋め込み TrueType の `cmap` |
 | フォント（CID） | Adobe-Japan1 の CID → Unicode 標準表（`Ordering (Japan1)`） |
+| フォント（1バイト） | `WinAnsiEncoding` / `MacRomanEncoding` などの標準エンコーディング |
 | タグ付き PDF | `/ActualText` があればその文字を使う |
 | フォーム | `AcroForm` のフィールド値（入力欄だけの PDF） |
 | 暗号化 | 検出して「暗号化されている」と返す（復号はしない） |
@@ -1242,7 +1248,7 @@ Python は不要です。
 | `tests/HistoryDisplayTests.cs` | 再起動後のツール詳細・旧形式との混在・重複防止・不完全な履歴 |
 
 ```
-Passed!  - Failed: 0, Passed: 524, Skipped: 0, Total: 524
+Passed!  - Failed: 0, Passed: 526, Skipped: 0, Total: 526
 ```
 
 所要時間は約 30 秒です。
