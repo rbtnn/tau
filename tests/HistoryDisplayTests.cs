@@ -185,6 +185,63 @@ namespace Tau.Tests
         }
 
         [Fact]
+        public void HistoryAlwaysLeavesABlankLineAfterTheLowerRule()
+        {
+            // 罫線の直後は必ず 1 行空ける。
+            // 以前は次のメッセージが本文かツール表示かで見た目が変わっていた。
+            llm.Reply = MockLlm.Text("回答です");
+            runner.WriteConfig(llm.Url);
+
+            runner.Run("質問\n/exit\n");
+            string h = History(runner.Run("/exit\n"));
+
+            // 罫線の行の次が空行であること
+            string[] lines = h.Replace("\r\n", "\n").Split('\n');
+
+            // 下罫線(プロンプト行の直後の罫線)を探す
+            int rule = -1;
+            for (int i = 0; i + 1 < lines.Length; i++)
+            {
+                if (lines[i].StartsWith("> ", StringComparison.Ordinal)
+                    && lines[i + 1].StartsWith("────", StringComparison.Ordinal))
+                {
+                    rule = i + 1;
+                    break;
+                }
+            }
+            Assert.True(rule >= 0, "no lower rule found:\n" + h);
+
+            // 罫線の次は空行、その次が本文
+            Assert.Equal("", lines[rule + 1]);
+            Assert.Contains("回答です", lines[rule + 2]);
+        }
+
+        [Fact]
+        public void HistoryToolTurnAlsoLeavesABlankLine()
+        {
+            // ツール呼び出しだけのターンでも、罫線の直後は空行にする。
+            llm.Reply = OneTool("shell", "{\"cmd\":\"echo HI\"}", "終わり");
+            runner.WriteConfig(llm.Url, allowTools: true);
+
+            runner.Run("調べて\n/exit\n");
+            string h = History(runner.Run("/exit\n"));
+
+            string[] lines = h.Replace("\r\n", "\n").Split('\n');
+            int rule = -1;
+            for (int i = 0; i + 1 < lines.Length; i++)
+            {
+                if (lines[i].StartsWith("> ", StringComparison.Ordinal)
+                    && lines[i + 1].StartsWith("────", StringComparison.Ordinal))
+                {
+                    rule = i + 1;
+                    break;
+                }
+            }
+            Assert.True(rule >= 0, "no lower rule found:\n" + h);
+            Assert.Equal("", lines[rule + 1]);
+        }
+
+        [Fact]
         public void HistoryDoesNotPrintAContinueMarker()
         {
             // 履歴の終わりに "---- continue below ----" は出さない。

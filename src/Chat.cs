@@ -692,6 +692,11 @@ namespace Tau
                     ConsoleUi.Accent("> ");
                     Console.WriteLine(content);
                     ConsoleUi.RuleBottom();
+
+                    // 罫線の直後は必ず 1 行空ける。
+                    // 空けないと、次に本文が来るかツール表示が来るかで
+                    // 見た目が変わってしまう。
+                    Console.WriteLine();
                 }
                 else if (role == "assistant")
                 {
