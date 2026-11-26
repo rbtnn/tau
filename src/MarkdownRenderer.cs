@@ -962,6 +962,15 @@ namespace Tau
             return ambiguousMeasured;
         }
 
+        // 文字列の表示幅(全角は 2)。行編集のカーソル計算に使う。
+        public static int TextWidth(string s)
+        {
+            if (s == null) return 0;
+            int n = 0;
+            foreach (char c in s) n += WidthOf(c);
+            return n;
+        }
+
         // 測った幅があればそれを返す。なければ計算値。
         static int WidthOf(char c)
         {

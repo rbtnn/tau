@@ -91,6 +91,67 @@ namespace Tau.Tests
             Assert.Equal(expected, Program.IsAutoEncodingPublic(name));
         }
 
+        // ---------------- 描画文字列 ----------------
+
+        [Fact]
+        public void RedrawDrawsPromptAndText()
+        {
+            // 以前はプロンプトを空白で上書きしていたため、
+            // 入力中の文字が画面に出なかった。
+            string s = LineEditor.BuildRedraw("> ", "hello", 5, 80, true);
+
+            Assert.Contains("> ", s);
+            Assert.Contains("hello", s);
+        }
+
+        [Fact]
+        public void RedrawClearsTheLineFirst()
+        {
+            // 行全体を消してから描き直す。
+            string s = LineEditor.BuildRedraw("> ", "abc", 3, 80, true);
+            Assert.Contains("\u001b[2K", s);
+        }
+
+        [Fact]
+        public void RedrawPutsCursorBackByVisibleWidth()
+        {
+            // "abc" の 1 文字目にカーソルがあるなら、2 桁戻る。
+            string s = LineEditor.BuildRedraw("> ", "abc", 1, 80, true);
+            Assert.Contains("\u001b[2D", s);
+        }
+
+        [Fact]
+        public void RedrawCountsWideCharactersAsTwoColumns()
+        {
+            // 日本語は 2 桁なので、カーソルを戻す量も 2 桁単位。
+            // 「あい」の先頭にカーソルがあるなら 4 桁戻る。
+            string s = LineEditor.BuildRedraw("> ", "あい", 0, 80, true);
+            Assert.Contains("\u001b[4D", s);
+        }
+
+        [Fact]
+        public void RedrawIgnoresAnsiEscapesInThePromptWidth()
+        {
+            // 色付きプロンプトのエスケープは表示幅に数えない。
+            // 数えてしまうと描画領域が狭くなり、本文が出なくなる。
+            string colored = "\u001b[36m> \u001b[0m";
+            string s = LineEditor.BuildRedraw(colored, "abcdef", 6, 10, true);
+
+            // 幅 10、プロンプト 2 桁 → 本文は最大 7 桁。
+            Assert.Contains("abcdef", s);
+        }
+
+        [Fact]
+        public void RedrawKeepsCursorVisibleInLongText()
+        {
+            // 長い入力では、カーソルが見えるよう先頭を削る。
+            string text = new string('x', 200);
+            string s = LineEditor.BuildRedraw("> ", text, 200, 40, true);
+
+            // 末尾に近い部分が表示される。
+            Assert.Contains("xxx", s);
+        }
+
         [Fact]
         public void Utf8AndShiftJisResolveToTheirCodePages()
         {

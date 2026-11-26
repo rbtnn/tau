@@ -170,14 +170,16 @@ namespace Tau
                 catch { return null; }
             }
 
-            // 色付きで表示する(幅は見た目と同じなのでプロンプト長で計算)
-            ConsoleUi.Accent(prompt);
+            // 色付きのプロンプトを組み立てる(EditLoop が毎回描き直す)
+            string colored = ConsoleUi.ColorEnabled
+                ? "\u001b[" + ansiColor + "m" + prompt + "\u001b[0m"
+                : prompt;
 
             EnterRawInput();
             try
             {
                 bool cancelled;
-                string result = EditLoop(prompt.Length, out cancelled);
+                string result = EditLoop(colored, out cancelled);
                 if (cancelled) return null;
                 Console.Write("\n");
                 return result;
@@ -193,13 +195,11 @@ namespace Tau
         {
             if (!interactive()) return ReadLineFallback(prompt);
 
-            Console.Write(prompt);
-
             EnterRawInput();
             try
             {
                 bool cancelled;
-                string result = EditLoop(prompt.Length, out cancelled);
+                string result = EditLoop(prompt, out cancelled);
                 if (cancelled) return null;
                 Console.Write("\n");
                 return result;
@@ -501,9 +501,8 @@ namespace Tau
                 while (true)
                 {
                     lineNo++;
-                    Console.Write(lineNo == 1 ? prompt : "");
                     bool cancelled;
-                    string line = EditLoop(0, out cancelled);
+                    string line = EditLoop(lineNo == 1 ? prompt : "", out cancelled);
                     if (cancelled) { r.Cancelled = true; break; }
                     Console.Write("\n");
 
@@ -542,10 +541,10 @@ namespace Tau
         // ---------------- 編集ループ ----------------
 
         // 1 行を編集して返す。cancelled=true なら Ctrl-G / Ctrl-D。
-        static string EditLoop(int promptWidth, out bool cancelled)
+        // prompt は毎回描き直すので、呼び出し側が表示していなくてよい。
+        static string EditLoop(string prompt, out bool cancelled)
         {
             cancelled = false;
-            lastWidth = 0;
             StringBuilder buf = new StringBuilder();
             int pos = 0;              // カーソル位置(0..buf.Length)
 
@@ -595,7 +594,7 @@ namespace Tau
                             {
                                 buf.Remove(pos - 1, 1);
                                 pos--;
-                                Redraw(buf.ToString(), pos, promptWidth);
+                                Redraw(prompt, buf.ToString(), pos);
                             }
                             continue;
 
@@ -608,28 +607,28 @@ namespace Tau
                             if (pos < buf.Length)
                             {
                                 buf.Remove(pos, 1);
-                                Redraw(buf.ToString(), pos, promptWidth);
+                                Redraw(prompt, buf.ToString(), pos);
                             }
                             continue;
 
                         case ConsoleKey.A:          // Ctrl-A  行頭へ
                             pos = 0;
-                            Redraw(buf.ToString(), pos, promptWidth);
+                            Redraw(prompt, buf.ToString(), pos);
                             continue;
 
                         case ConsoleKey.E:          // Ctrl-E  行末へ
                             pos = buf.Length;
-                            Redraw(buf.ToString(), pos, promptWidth);
+                            Redraw(prompt, buf.ToString(), pos);
                             continue;
 
                         case ConsoleKey.B:          // Ctrl-B  1文字戻る
                             if (pos > 0) pos--;
-                            Redraw(buf.ToString(), pos, promptWidth);
+                            Redraw(prompt, buf.ToString(), pos);
                             continue;
 
                         case ConsoleKey.F:          // Ctrl-F  1文字進む
                             if (pos < buf.Length) pos++;
-                            Redraw(buf.ToString(), pos, promptWidth);
+                            Redraw(prompt, buf.ToString(), pos);
                             continue;
 
                         case ConsoleKey.K:          // Ctrl-K  カーソル以降を切る
@@ -637,7 +636,7 @@ namespace Tau
                             {
                                 killRing = buf.ToString(pos, buf.Length - pos);
                                 buf.Remove(pos, buf.Length - pos);
-                                Redraw(buf.ToString(), pos, promptWidth);
+                                Redraw(prompt, buf.ToString(), pos);
                             }
                             else killRing = "";
                             continue;
@@ -648,7 +647,7 @@ namespace Tau
                                 killRing = buf.ToString(0, pos);
                                 buf.Remove(0, pos);
                                 pos = 0;
-                                Redraw(buf.ToString(), pos, promptWidth);
+                                Redraw(prompt, buf.ToString(), pos);
                             }
                             else killRing = "";
                             continue;
@@ -661,7 +660,7 @@ namespace Tau
                                     killRing = buf.ToString(start, pos - start);
                                     buf.Remove(start, pos - start);
                                     pos = start;
-                                    Redraw(buf.ToString(), pos, promptWidth);
+                                    Redraw(prompt, buf.ToString(), pos);
                                 }
                                 else killRing = "";
                             }
@@ -672,13 +671,13 @@ namespace Tau
                             {
                                 buf.Insert(pos, killRing);
                                 pos += killRing.Length;
-                                Redraw(buf.ToString(), pos, promptWidth);
+                                Redraw(prompt, buf.ToString(), pos);
                             }
                             continue;
 
                         case ConsoleKey.L:          // Ctrl-L  画面クリアして再描画
                             try { Console.Clear(); } catch { }
-                            Redraw(buf.ToString(), pos, promptWidth);
+                            Redraw(prompt, buf.ToString(), pos);
                             continue;
 
                         case ConsoleKey.G:          // Ctrl-G  中止
@@ -700,7 +699,7 @@ namespace Tau
                                 buf[i - 1] = buf[i];
                                 buf[i] = c1;
                                 if (pos < buf.Length) pos++;
-                                Redraw(buf.ToString(), pos, promptWidth);
+                                Redraw(prompt, buf.ToString(), pos);
                             }
                             continue;
 
@@ -718,11 +717,11 @@ namespace Tau
                     {
                         case ConsoleKey.B:          // Alt-B  単語単位で戻る
                             pos = WordStart(buf.ToString(), pos);
-                            Redraw(buf.ToString(), pos, promptWidth);
+                            Redraw(prompt, buf.ToString(), pos);
                             continue;
                         case ConsoleKey.F:          // Alt-F  単語単位で進む
                             pos = WordEnd(buf.ToString(), pos);
-                            Redraw(buf.ToString(), pos, promptWidth);
+                            Redraw(prompt, buf.ToString(), pos);
                             continue;
                         case ConsoleKey.D:          // Alt-D  次の単語を切る
                             {
@@ -731,7 +730,7 @@ namespace Tau
                                 {
                                     killRing = buf.ToString(pos, end - pos);
                                     buf.Remove(pos, end - pos);
-                                    Redraw(buf.ToString(), pos, promptWidth);
+                                    Redraw(prompt, buf.ToString(), pos);
                                 }
                             }
                             continue;
@@ -743,7 +742,7 @@ namespace Tau
                                     killRing = buf.ToString(start, pos - start);
                                     buf.Remove(start, pos - start);
                                     pos = start;
-                                    Redraw(buf.ToString(), pos, promptWidth);
+                                    Redraw(prompt, buf.ToString(), pos);
                                 }
                             }
                             continue;
@@ -762,7 +761,7 @@ namespace Tau
                         {
                             buf.Remove(pos - 1, 1);
                             pos--;
-                            Redraw(buf.ToString(), pos, promptWidth);
+                            Redraw(prompt, buf.ToString(), pos);
                         }
                         continue;
 
@@ -770,28 +769,28 @@ namespace Tau
                         if (pos < buf.Length)
                         {
                             buf.Remove(pos, 1);
-                            Redraw(buf.ToString(), pos, promptWidth);
+                            Redraw(prompt, buf.ToString(), pos);
                         }
                         continue;
 
                     case ConsoleKey.LeftArrow:
                         if (pos > 0) pos--;
-                        Redraw(buf.ToString(), pos, promptWidth);
+                        Redraw(prompt, buf.ToString(), pos);
                         continue;
 
                     case ConsoleKey.RightArrow:
                         if (pos < buf.Length) pos++;
-                        Redraw(buf.ToString(), pos, promptWidth);
+                        Redraw(prompt, buf.ToString(), pos);
                         continue;
 
                     case ConsoleKey.Home:
                         pos = 0;
-                        Redraw(buf.ToString(), pos, promptWidth);
+                        Redraw(prompt, buf.ToString(), pos);
                         continue;
 
                     case ConsoleKey.End:
                         pos = buf.Length;
-                        Redraw(buf.ToString(), pos, promptWidth);
+                        Redraw(prompt, buf.ToString(), pos);
                         continue;
 
                     case ConsoleKey.Escape:
@@ -806,7 +805,7 @@ namespace Tau
                 {
                     buf.Insert(pos, ch);
                     pos++;
-                    Redraw(buf.ToString(), pos, promptWidth);
+                    Redraw(prompt, buf.ToString(), pos);
                 }
             }
         }
@@ -840,55 +839,139 @@ namespace Tau
 
         // 行を描き直し、カーソルを pos の位置へ戻す。
         // promptWidth はプロンプトの表示幅(再描画時のカーソル計算に使う)。
-        static int lastWidth = 0;   // 直前に描いた文字数(消去用)
+        // ANSI エスケープが使えるか。使えないときは "\r" で描き直す。
+        static bool ansiOk = ConsoleUi.ColorEnabled;
 
-        static void Redraw(string text, int pos, int promptWidth)
+        // 画面に見える文字数を数える(ANSI エスケープは除く)。
+        static int VisibleWidth(string s)
+        {
+            if (s == null || s.Length == 0) return 0;
+
+            int n = 0;
+            for (int i = 0; i < s.Length; i++)
+            {
+                if (s[i] == '\u001b')
+                {
+                    // ESC [ ... 最終バイト(0x40-0x7E)まで読み飛ばす
+                    i++;
+                    if (i < s.Length && s[i] == '[')
+                    {
+                        i++;
+                        while (i < s.Length && !(s[i] >= 0x40 && s[i] <= 0x7E)) i++;
+                    }
+                    continue;
+                }
+                n++;
+            }
+            return n;
+        }
+
+        // 画面幅を返す。取得できないときは 80。
+        static int ScreenWidth()
+        {
+            try
+            {
+                int w = Console.WindowWidth;
+                if (w > 0 && w <= 10000) return w;
+            }
+            catch { }
+            return 80;
+        }
+
+        // 行を描き直し、カーソルを pos の位置へ戻す。
+        //
+        // 以前は "\r" で行頭に戻り、プロンプトを空白で上書きしていた。
+        // Windows のコンソールでは "\r" だけでは行頭に戻らず、
+        // ANSI エスケープの直後だと効かないことがある。そのため
+        // 本文が画面に出ず、カーソルだけが動いて見えていた。
+        //
+        // ここでは ANSI の ESC[2K(行全体を消す) と ESC[G(行頭へ) を使い、
+        // プロンプトも含めて毎回描き直す。ANSI が使えないときは "\r" に
+        // フォールバックする。
+        static void Redraw(string prompt, string text, int pos)
         {
             // 描画の前に既定色へ戻す。
-            // ANSI の ESC[0m は端末の既定色に戻すが、Windows のコンソールでは
-            // 黒背景+黒文字のことがあり、そのままだと入力中の文字が見えない。
+            // ESC[0m は端末の既定色に戻すが、Windows のコンソールでは
+            // 黒背景+黒文字のことがあり、そのままだと文字が見えない。
             ConsoleUi.ApplyDefaultColors();
 
             try
             {
-                int width = 0;
-                try { width = Console.WindowWidth; } catch { }
-                // 取得できない・異常な値(0 や極端に大きい)のときは既定値にする
-                if (width <= 0 || width > 10000) width = 80;
-
-                int avail = Math.Max(1, width - 1 - promptWidth);
-
-                // 画面幅に収まらない場合は、カーソルが見えるよう表示範囲をずらす
-                int start = 0;
-                if (text.Length > avail) start = Math.Max(0, pos - (avail - 1));
-                int len = Math.Min(text.Length - start, avail);
-
-                string shown = text.Substring(start, len);
-                int shownPos = pos - start;
-
-                // 行頭に戻り、プロンプトは既に表示済みなので、
-                // その幅ぶん進めてから本文を描き直す。
-                // (Console.SetCursorPosition は端末によってカーソル位置問い合わせを
-                //  送ってしまうため使わない)
-                Console.Write("\r");
-
-                // プロンプトの分だけ進める(プロンプトは呼び出し側が表示済み)
-                StringBuilder sb = new StringBuilder();
-                if (promptWidth > 0) sb.Append(new string(' ', promptWidth));
-
-                int erase = Math.Max(lastWidth, shown.Length);
-                sb.Append(shown);
-                sb.Append(new string(' ', Math.Max(0, erase - shown.Length)));
-
-                // カーソルを目的の位置に置くため、一度末尾まで書いてから戻す
-                sb.Append("\r");
-                if (promptWidth > 0) sb.Append(new string(' ', promptWidth));
-                if (shownPos > 0) sb.Append(new string(' ', shownPos));
-
-                Console.Write(sb.ToString());
-                lastWidth = shown.Length;
+                Console.Write(BuildRedraw(prompt, text, pos, ScreenWidth()));
             }
             catch { }
+        }
+
+        // 描き直し用の文字列を組み立てる(テストできるよう分離)。
+        //
+        // 出力は「行全体を消す → 行頭へ → プロンプト → 本文 → カーソルを戻す」。
+        // 以前は "\r" で行頭に戻り、プロンプトを空白で上書きしていた。
+        // Windows のコンソールでは "\r" だけでは行頭に戻らず、ANSI の直後だと
+        // 効かないことがあるため、本文が画面に出ず、カーソルだけが動いていた。
+        internal static string BuildRedraw(string prompt, string text, int pos, int width)
+        {
+            return BuildRedraw(prompt, text, pos, width, ansiOk);
+        }
+
+        internal static string BuildRedraw(string prompt, string text, int pos, int width, bool useAnsi)
+        {
+            // プロンプトの表示幅。色付きのプロンプトは ANSI エスケープを
+            // 含むため、文字数ではなく「見える文字数」で数える。
+            // ここを間違えると avail が 0 になり、本文が描かれない。
+            int promptWidth = VisibleWidth(prompt);
+            int avail = Math.Max(1, width - 1 - promptWidth);
+
+            // 画面幅に収まらない場合は、カーソルが見えるよう表示範囲をずらす。
+            // 全角は 2 桁なので、表示幅で計算する。
+            int start = 0;
+            int textWidth = MarkdownRenderer.TextWidth(text);
+            if (textWidth > avail)
+            {
+                // pos より前を、avail に収まる範囲で削る
+                int keep = avail - 1;
+                while (start < pos && MarkdownRenderer.TextWidth(text.Substring(start, pos - start)) > keep)
+                    start++;
+            }
+            int len = text.Length - start;
+            while (len > 0 && MarkdownRenderer.TextWidth(text.Substring(start, len)) > avail) len--;
+
+            string shown = text.Substring(start, len);
+            int shownPos = pos - start;
+
+            StringBuilder sb = new StringBuilder();
+
+            if (useAnsi)
+            {
+                // 行全体を消してから、行頭に戻って描き直す
+                sb.Append("\u001b[2K");
+                sb.Append('\r');
+            }
+            else
+            {
+                sb.Append('\r');
+                sb.Append(new string(' ', width - 1));
+                sb.Append('\r');
+            }
+
+            // プロンプトも描き直す(以前は空白で消していた)
+            sb.Append(prompt);
+            sb.Append(shown);
+
+            // カーソルを目的の位置へ戻す。
+            // 全角は 2 桁なので、文字数ではなく表示幅で戻す。
+            int back = MarkdownRenderer.TextWidth(shown.Substring(shownPos));
+            if (back > 0)
+            {
+                if (useAnsi) sb.Append("\u001b[" + back + "D");
+                else
+                {
+                    sb.Append('\r');
+                    sb.Append(new string(' ', promptWidth
+                        + MarkdownRenderer.TextWidth(shown.Substring(0, shownPos))));
+                }
+            }
+
+            return sb.ToString();
         }
     }
 }
